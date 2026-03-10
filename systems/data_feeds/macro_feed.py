@@ -57,7 +57,8 @@ def fetch_cot_data(conn) -> int:
     try:
         logger.info("Fetching CFTC COT data via cot-reports...")
         current_year = datetime.now().year
-        years = [current_year, current_year - 1, current_year - 2]
+        BACKFILL_START_YEAR = 2015  # 3-year buffer before 2018 for z-score warm-up
+        years = list(range(BACKFILL_START_YEAR, current_year + 1))
 
         frames = []
         for year in years:

@@ -29,7 +29,7 @@ MACRO_SERIES = {
 
     # Volatility & Risk
     "vix":              ("VIXCLS",      "VIX (CBOE)",               "daily"),
-    "move_index":       ("BAMLMOVE",    "MOVE Index (bond vol)",    "daily"),  # if available
+    # "move_index":     ("BAMLMOVE",    "MOVE Index (bond vol)",    "daily"),  # not on FRED
 
     # Credit
     "hy_spread":        ("BAMLH0A0HYM2", "HY Credit Spread (OAS)", "daily"),
@@ -38,7 +38,7 @@ MACRO_SERIES = {
     # Growth / Activity
     "industrial_prod":  ("INDPRO",      "Industrial Production",    "monthly"),
     "retail_sales":     ("RSAFS",       "Retail Sales",             "monthly"),
-    "pmi_ism_mfg":      ("NAPM",        "ISM Manufacturing PMI",    "monthly"),
+    # "pmi_ism_mfg":    ("NAPM",        "ISM Manufacturing PMI",    "monthly"),  # discontinued on FRED
     "leading_index":    ("USSLIND",     "Leading Index (CB)",       "monthly"),
     "unemployment":     ("UNRATE",      "Unemployment Rate",        "monthly"),
     "nfp":              ("PAYEMS",      "Nonfarm Payrolls",         "monthly"),
@@ -115,6 +115,14 @@ REGIME_COLORS = {
 DASHBOARD_HOST = "127.0.0.1"
 DASHBOARD_PORT = 8050
 DASHBOARD_REFRESH_SECONDS = 3600   # 1 hour for EOD data
+
+CHART_BASE_LAYOUT = dict(
+    template="plotly_dark",
+    paper_bgcolor="#1a1a2e",
+    plot_bgcolor="#1a1a2e",
+    font=dict(color="#e0e0e0"),
+    margin=dict(l=40, r=20, t=40, b=30),
+)
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 LOG_PATH = "logs/phase1.log"

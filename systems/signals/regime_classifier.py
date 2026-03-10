@@ -392,7 +392,76 @@ class RegimeClassifier:
         If persist=True, saves to regime_history table.
         """
         snap = self._load_snapshot()
+        return self._score_and_build_result(snap, persist=persist)
 
+    def classify_from_df(self, macro_df: pd.DataFrame, cot_df: pd.DataFrame) -> RegimeResult:
+        """
+        Run classifier against a pre-sliced DataFrame snapshot.
+        Used by the backfill script to avoid N round-trips to the DB.
+        macro_df: rows from macro_series WHERE date <= as_of_date
+        cot_df:   rows from cot_positioning WHERE date <= as_of_date
+        """
+        snap = self._load_snapshot_from_df(macro_df, cot_df)
+        return self._score_and_build_result(snap, persist=False)
+
+    def _load_snapshot_from_df(self, macro_df: pd.DataFrame, cot_df: pd.DataFrame) -> MacroSnapshot:
+        """Replicate _load_snapshot() using pre-loaded DataFrames instead of DB calls."""
+        snap = MacroSnapshot()
+        missing = []
+
+        def get_val(series_id: str) -> float | None:
+            sub = macro_df[macro_df["series_id"] == series_id]
+            if sub.empty:
+                missing.append(series_id)
+                return None
+            return sub.iloc[-1]["value"]
+
+        def get_z(series_id: str) -> float | None:
+            sub = macro_df[macro_df["series_id"] == series_id]
+            if sub.empty:
+                return None
+            row = sub.iloc[-1]
+            return row.get("z_1y") if "z_1y" in row.index else None
+
+        def get_chg(series_id: str) -> float | None:
+            sub = macro_df[macro_df["series_id"] == series_id]
+            if sub.empty:
+                return None
+            row = sub.iloc[-1]
+            return row.get("chg_1m") if "chg_1m" in row.index else None
+
+        snap.vix              = get_val("vix")
+        snap.vix_z1y          = get_z("vix")
+        snap.hy_spread        = get_val("hy_spread")
+        snap.ig_spread        = get_val("ig_spread")
+        snap.yield_curve_10_2 = get_val("yield_curve_10_2")
+        snap.yield_curve_10_3 = get_val("yield_curve_10_3")
+        snap.breakeven_10y    = get_val("breakeven_10y")
+        snap.real_rate_10y    = get_val("real_rate_10y")
+        snap.unemployment     = get_val("unemployment")
+        snap.m2_yoy           = get_val("m2_yoy_growth")
+        snap.jobless_claims   = get_val("jobless_claims")
+        snap.claims_z1y       = get_z("jobless_claims")
+        snap.oil_chg_3m       = get_chg("oil_wti")
+
+        # Unemployment delta: compare last reading to 3 months ago
+        unemp_sub = macro_df[macro_df["series_id"] == "unemployment"]
+        if len(unemp_sub) >= 3:
+            snap.unemp_delta_3m = (
+                unemp_sub["value"].iloc[-1] - unemp_sub["value"].iloc[-3]
+            )
+
+        # COT SP500 z-score
+        cot_sub = cot_df[cot_df["instrument"] == "SP500"] if not cot_df.empty else pd.DataFrame()
+        if not cot_sub.empty:
+            snap.cot_sp500_z = cot_sub.iloc[-1]["z_score_1y"]
+
+        snap.missing_inputs = missing
+        snap.as_of = macro_df["date"].max().date() if not macro_df.empty else date.today()
+        return snap
+
+    def _score_and_build_result(self, snap: MacroSnapshot, persist: bool = True) -> RegimeResult:
+        """Score all components, build RegimeResult, optionally persist."""
         vol_score,   vol_bull,   vol_bear   = self._score_vol(snap)
         cred_score,  cred_bull,  cred_bear  = self._score_credit(snap)
         curv_score,  curv_bull,  curv_bear  = self._score_curve(snap)

@@ -95,7 +95,9 @@ def upsert_series(conn: duckdb.DuckDBPyConnection, series_id: str,
     df["series_id"] = series_id
     df["series_name"] = series_name
 
-    # Compute z-scores if enough history
+    # Compute z-scores if enough history (always initialize columns so SQL SELECT works)
+    df["z_score_1y"] = None
+    df["z_score_5y"] = None
     if len(df) >= 252:
         df["z_score_1y"] = (
             (df["value"] - df["value"].rolling(252).mean())

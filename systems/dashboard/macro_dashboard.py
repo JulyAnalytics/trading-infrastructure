@@ -28,7 +28,7 @@ import plotly.express as px
 import pandas as pd
 from datetime import datetime
 
-from config import REGIME_COLORS, DASHBOARD_HOST, DASHBOARD_PORT, DASHBOARD_REFRESH_SECONDS
+from config import REGIME_COLORS, DASHBOARD_HOST, DASHBOARD_PORT, DASHBOARD_REFRESH_SECONDS, CHART_BASE_LAYOUT
 from systems.signals.regime_classifier import RegimeClassifier
 from systems.utils.db import get_connection, get_series_history
 
@@ -59,6 +59,37 @@ def get_series_df(series_id: str, days: int = 756) -> pd.DataFrame:
     conn.close()
     return df
 
+def get_series_delta(series_id: str, periods: int = 5) -> dict | None:
+    """
+    Returns dict with 'current', 'delta', 'pct_change', 'direction'
+    for the most recent reading vs. `periods` rows ago (approx 1 week for daily data).
+    Returns None if insufficient history.
+    """
+    df = get_series_df(series_id, days=30)
+    if df is None or len(df) < periods + 1:
+        return None
+    df = df.sort_values("date")
+    current = df["value"].iloc[-1]
+    prior   = df["value"].iloc[-(periods + 1)]
+    delta   = current - prior
+    pct     = (delta / abs(prior) * 100) if prior != 0 else 0
+    return {
+        "current":    current,
+        "delta":      delta,
+        "pct_change": pct,
+        "direction":  "▲" if delta > 0 else "▼" if delta < 0 else "→",
+        "color":      "#ff4444" if delta > 0 else "#00C851" if delta < 0 else "#aaa",
+        # Note: for VIX/spreads, rising = bearish. Caller decides color semantics.
+    }
+
+
+def fmt_delta(val: float, d: dict | None) -> str:
+    if d is None:
+        return f"{val:.1f}"
+    sign = "+" if d["delta"] > 0 else ""
+    return f"{val:.1f}  {d['direction']} {sign}{d['delta']:.1f} (1W)"
+
+
 def get_cot_df() -> pd.DataFrame:
     conn = get_connection()
     df = conn.execute("""
@@ -76,7 +107,7 @@ def get_cot_df() -> pd.DataFrame:
 def build_vix_chart(days: int = 756) -> go.Figure:
     df = get_series_df("vix", days)
     if df.empty:
-        return go.Figure()
+        return go.Figure().update_layout(**CHART_BASE_LAYOUT, height=340)
 
     fig = go.Figure()
     fig.add_trace(go.Scatter(
@@ -93,13 +124,13 @@ def build_vix_chart(days: int = 756) -> go.Figure:
         fig.add_hline(y=level, line=dict(color=color, dash="dot", width=1),
                       annotation_text=label, annotation_position="right")
 
+    d = get_series_delta("vix")
+    title = f"VIX  {fmt_delta(d['current'], d)}" if d else "VIX History"
+
     fig.update_layout(
-        title="VIX History",
-        template="plotly_dark",
-        paper_bgcolor="#1a1a2e",
-        plot_bgcolor="#1a1a2e",
-        margin=dict(l=10, r=10, t=40, b=10),
-        height=260,
+        **CHART_BASE_LAYOUT,
+        title=title,
+        height=340,
         showlegend=False,
         yaxis=dict(title="VIX"),
     )
@@ -121,13 +152,13 @@ def build_hy_spread_chart(days: int = 756) -> go.Figure:
         fig.add_hline(y=level, line=dict(color="rgba(255,255,255,0.2)", dash="dot"),
                       annotation_text=f"{level}bps", annotation_position="right")
 
+    d = get_series_delta("hy_spread")
+    title = f"HY Spread  {fmt_delta(d['current'], d)}bps" if d else "HY Credit Spread (OAS, bps)"
+
     fig.update_layout(
-        title="HY Credit Spread (OAS, bps)",
-        template="plotly_dark",
-        paper_bgcolor="#1a1a2e",
-        plot_bgcolor="#1a1a2e",
-        margin=dict(l=10, r=10, t=40, b=10),
-        height=260,
+        **CHART_BASE_LAYOUT,
+        title=title,
+        height=340,
         showlegend=False,
     )
     return fig
@@ -154,13 +185,17 @@ def build_yield_curve_chart(days: int = 756) -> go.Figure:
     fig.add_hline(y=0, line=dict(color="rgba(255,68,68,0.8)", width=1.5),
                   annotation_text="Inversion", annotation_position="right")
 
+    d = get_series_delta("yield_curve_10_2")
+    if d:
+        crv_current = d["current"] * 100 if abs(d["current"]) < 5 else d["current"]
+        title = f"10Y-2Y  {fmt_delta(crv_current, d)}bps"
+    else:
+        title = "10Y-2Y Yield Spread (bps)"
+
     fig.update_layout(
-        title="10Y-2Y Yield Spread (bps)",
-        template="plotly_dark",
-        paper_bgcolor="#1a1a2e",
-        plot_bgcolor="#1a1a2e",
-        margin=dict(l=10, r=10, t=40, b=10),
-        height=260,
+        **CHART_BASE_LAYOUT,
+        title=title,
+        height=340,
         showlegend=False,
     )
     return fig
@@ -187,59 +222,57 @@ def build_component_scores_chart(result) -> go.Figure:
     ))
     fig.add_hline(y=0, line=dict(color="white", width=0.5))
     fig.update_layout(
+        **CHART_BASE_LAYOUT,
         title="Component Scores (-1 to +1)",
-        template="plotly_dark",
-        paper_bgcolor="#1a1a2e",
-        plot_bgcolor="#1a1a2e",
         yaxis=dict(range=[-1.2, 1.2]),
-        margin=dict(l=10, r=10, t=40, b=10),
         height=260,
     )
     return fig
 
 
 def build_regime_history_chart() -> go.Figure:
-    df = get_regime_history_df()
+    df = get_regime_history_df()   # already calls clf.get_history(lookback_days=756)
     if df.empty:
-        return go.Figure()
+        return go.Figure().update_layout(**CHART_BASE_LAYOUT, height=260)
 
-    color_map = {
-        "RISK_ON_LOW_VOL":      "#00C851",
-        "RISK_ON_ELEVATED_VOL": "#ffbb33",
-        "NEUTRAL":              "#33b5e5",
-        "CAUTION":              "#FF8800",
-        "RISK_OFF_STRESS":      "#ff4444",
-        "CRISIS":               "#CC0000",
-    }
+    df["date"] = pd.to_datetime(df["date"])
+    df = df.sort_values("date").reset_index(drop=True)
 
     fig = go.Figure()
     fig.add_trace(go.Scatter(
-        x=df["date"], y=df["composite_score"],
+        x=df["date"],
+        y=df["composite_score"],
         mode="lines",
-        line=dict(color="#ffffff", width=1),
+        line=dict(color="#7c83fd", width=1.5),
         name="Composite Score",
     ))
 
-    # Color bands
-    for score, label, color in [
-        (0.60,  "Risk On Low Vol",      "rgba(0,200,81,0.12)"),
-        (0.25,  "Risk On Elev Vol",     "rgba(255,187,51,0.12)"),
-        (-0.10, "Neutral",              "rgba(51,181,229,0.08)"),
-        (-0.40, "Caution",              "rgba(255,136,0,0.12)"),
-        (-0.65, "Risk Off",             "rgba(255,68,68,0.12)"),
-    ]:
-        pass  # band shading is complex — simplified here
+    # Zero line
+    fig.add_hline(y=0, line=dict(color="rgba(255,255,255,0.2)", width=1))
+
+    # Regime transition markers — vertical dashed lines + rotated label
+    transitions = df[df["regime"] != df["regime"].shift(1)].iloc[1:]  # skip first row
+    for _, row in transitions.iterrows():
+        fig.add_vline(
+            x=row["date"].timestamp() * 1000,  # plotly expects ms for datetime axis
+            line_width=1, line_dash="dash", line_color="#444"
+        )
+        fig.add_annotation(
+            x=row["date"], y=1.05, yref="paper",
+            text=row["regime"].replace("_", " "),
+            showarrow=False,
+            font=dict(size=7, color="#888"),
+            textangle=-45,
+            xanchor="left",
+        )
 
     fig.update_layout(
+        **CHART_BASE_LAYOUT,
         title="Regime Score History",
-        template="plotly_dark",
-        paper_bgcolor="#1a1a2e",
-        plot_bgcolor="#1a1a2e",
-        margin=dict(l=10, r=10, t=40, b=10),
-        height=200,
-        yaxis=dict(range=[-1.1, 1.1], title="Score"),
+        height=260,
+        yaxis=dict(range=[-1.2, 1.2]),
+        xaxis=dict(tickformat="%b %Y", nticks=8),  # fixes the timestamp bug
         showlegend=False,
-        legend=dict(x=0.01, xanchor='left'),
     )
     return fig
 
@@ -248,6 +281,40 @@ def build_regime_history_chart() -> go.Figure:
 
 def build_regime_card(result) -> dbc.Card:
     color = REGIME_COLORS.get(result.regime, "#33b5e5")
+
+    vix_delta = get_series_delta("vix")
+    hy_delta  = get_series_delta("hy_spread")
+    crv_delta = get_series_delta("yield_curve_10_2")
+
+    snap = result.snapshot
+    vix_val = vix_delta["current"] if vix_delta else snap.vix
+    hy_val  = hy_delta["current"]  if hy_delta  else snap.hy_spread
+    crv_val = crv_delta["current"] if crv_delta else snap.yield_curve_10_2
+    if crv_val is not None:
+        crv_val = crv_val * 100 if abs(crv_val) < 5 else crv_val
+
+    reading_rows = []
+    if vix_val is not None:
+        reading_rows.append(html.Div([
+            html.Span("VIX: ", style={"color": "#888", "fontSize": "0.78rem"}),
+            html.Span(fmt_delta(vix_val, vix_delta),
+                      style={"color": vix_delta["color"] if vix_delta else "#e0e0e0",
+                             "fontSize": "0.82rem"}),
+        ]))
+    if hy_val is not None:
+        reading_rows.append(html.Div([
+            html.Span("HY Spread: ", style={"color": "#888", "fontSize": "0.78rem"}),
+            html.Span(fmt_delta(hy_val, hy_delta),
+                      style={"color": hy_delta["color"] if hy_delta else "#e0e0e0",
+                             "fontSize": "0.82rem"}),
+        ]))
+    if crv_val is not None:
+        reading_rows.append(html.Div([
+            html.Span("10Y-2Y: ", style={"color": "#888", "fontSize": "0.78rem"}),
+            html.Span(fmt_delta(crv_val, crv_delta),
+                      style={"color": "#e0e0e0", "fontSize": "0.82rem"}),
+        ]))
+
     return dbc.Card(
         dbc.CardBody([
             html.H6("CURRENT REGIME", className="text-muted mb-1",
@@ -260,6 +327,7 @@ def build_regime_card(result) -> dbc.Card:
                 dbc.Badge(f"Confidence: {result.confidence}",
                           color="dark"),
             ]),
+            html.Div(reading_rows, className="mt-2"),
             html.Small(f"As of {result.as_of}", className="text-muted mt-2 d-block"),
         ]),
         style={"background": "#12122a", "border": f"1px solid {color}"},
@@ -376,11 +444,28 @@ app.layout = dbc.Container(
                     dbc.Col(dcc.Graph(id="component-scores", config={"displayModeBar": False}), width=6),
                     dbc.Col(dcc.Graph(id="regime-history",   config={"displayModeBar": False}), width=6),
                 ], className="mb-2"),
-                dbc.Row([
-                    dbc.Col(dcc.Graph(id="vix-chart",    config={"displayModeBar": False}), width=4),
-                    dbc.Col(dcc.Graph(id="hy-chart",     config={"displayModeBar": False}), width=4),
-                    dbc.Col(dcc.Graph(id="curve-chart",  config={"displayModeBar": False}), width=4),
-                ]),
+                dbc.Tabs(
+                    [
+                        dbc.Tab(
+                            dcc.Graph(id="vix-chart", config={"displayModeBar": False}),
+                            label="VIX",
+                            tab_id="tab-vix",
+                        ),
+                        dbc.Tab(
+                            dcc.Graph(id="hy-chart", config={"displayModeBar": False}),
+                            label="HY Spreads",
+                            tab_id="tab-hy",
+                        ),
+                        dbc.Tab(
+                            dcc.Graph(id="curve-chart", config={"displayModeBar": False}),
+                            label="Yield Curve",
+                            tab_id="tab-curve",
+                        ),
+                    ],
+                    id="bottom-chart-tabs",
+                    active_tab="tab-vix",
+                    style={"marginTop": "8px"},
+                ),
             ], width=9),
         ]),
     ]
@@ -430,34 +515,6 @@ def refresh_all(_):
             "No COT data",
             f"Error at {datetime.now().strftime('%H:%M:%S')}",
         )
-
-
-def backfill_regime_history():
-    """Run classifier for each date we have macro data but no regime score."""
-    from systems.signals.regime_classifier import RegimeClassifier
-    from systems.utils.db import get_connection
-    conn = get_connection()
-
-    # Find dates with macro data but no regime classification
-    missing = conn.execute("""
-        SELECT DISTINCT date FROM macro_series
-        WHERE date NOT IN (SELECT date FROM regime_history)
-        AND date >= current_date - INTERVAL 730 DAY
-        ORDER BY date
-    """).df()
-
-    if len(missing) == 0:
-        return
-
-    print(f"Backfilling {len(missing)} regime history dates...")
-    clf = RegimeClassifier()
-    # Note: V1 classifier uses today's snapshot for all dates —
-    # true historical backfill requires per-date data slicing.
-    # For now, just run once to populate today's date if missing.
-    result = clf.classify(persist=True)
-    print(f"Regime history updated: {result.regime}")
-
-backfill_regime_history()
 
 
 # ── Entry Point ───────────────────────────────────────────────────────────────
