@@ -1,0 +1,37 @@
+# Environment — never commit secrets
+.env
+
+# Raw and cached data are excluded for reproducibility:
+# all raw data is re-fetchable from its original source (FRED, Polygon, etc.),
+# so committing it would bloat the repo without adding value.
+data/raw/*
+data/cache/*
+
+# Keep the directory structure tracked
+!data/raw/.gitkeep
+!data/cache/.gitkeep
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
