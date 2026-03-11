@@ -289,8 +289,93 @@ def compute_derived_series():
 
     # VIX / Realized Vol spread (proxy: VIX vs 20-day rolling stdev of daily changes)
     # This requires SPY data — placeholder query structure
+
+    # SPX rolling drawdown (from 252-day peak). Values are 0.0 at peaks, negative at troughs.
+    conn.execute("""
+        INSERT OR REPLACE INTO macro_series (series_id, series_name, date, value)
+        SELECT
+            'spy_drawdown'  AS series_id,
+            'SPY Drawdown from 252d Peak (%)' AS series_name,
+            date,
+            (value / MAX(value) OVER (
+                ORDER BY date
+                ROWS BETWEEN 251 PRECEDING AND CURRENT ROW
+            ) - 1) * 100  AS value
+        FROM macro_series
+        WHERE series_id = 'spy'
+        ORDER BY date
+    """)
+
     logger.info("Derived series computed.")
     conn.close()
+
+
+# ── Phase 4: Calendar Feed ────────────────────────────────────────────────────
+
+def fetch_calendar_data(fred: Fred, conn, days_ahead: int = 45):
+    """Fetch upcoming macro release dates and FOMC decisions into macro_calendar."""
+    from config import FOMC_SCHEDULE_2026
+    from datetime import date, timedelta
+
+    today    = date.today()
+    end_date = today + timedelta(days=days_ahead)
+
+    FRED_RELEASE_MAP = {
+        "CPI Release":            (10,  "inflation", "inflation", 1),
+        "PCE Release":            (54,  "inflation", "inflation", 1),
+        "Nonfarm Payrolls":       (50,  "labor",     "labor",     1),
+        "Initial Jobless Claims": (56,  "labor",     "labor",     2),
+        "Retail Sales":           (39,  "growth",    None,        2),
+        "Industrial Production":  (13,  "growth",    None,        2),
+    }
+
+    rows = []
+
+    for event_name, (release_id, category, component, importance) in FRED_RELEASE_MAP.items():
+        try:
+            dates = fred.get_release_dates(
+                release_id,
+                realtime_start=today.strftime("%Y-%m-%d"),
+                realtime_end=end_date.strftime("%Y-%m-%d"),
+            )
+            for d in dates:
+                rows.append((event_name, d, category, importance, component, "fred"))
+        except Exception as e:
+            logger.warning(f"Calendar: could not fetch {event_name}: {e}")
+
+    for d_str in FOMC_SCHEDULE_2026:
+        d = date.fromisoformat(d_str)
+        if today <= d <= end_date:
+            rows.append(("FOMC Decision", d, "central_bank", 1, None, "fomc_schedule"))
+
+    for row in rows:
+        conn.execute("""
+            INSERT OR REPLACE INTO macro_calendar
+                (event_name, event_date, category, importance, component, source)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, list(row))
+
+    logger.info(f"Calendar: upserted {len(rows)} events through {end_date}")
+
+
+# ── Phase 4: Equity Feed ──────────────────────────────────────────────────────
+
+def fetch_equity_data(conn, tickers: list = None, start: str = "2017-01-01"):
+    """Fetch equity price history via yfinance and store in macro_series."""
+    if tickers is None:
+        tickers = ["SPY"]
+    import yfinance as yf
+    for ticker in tickers:
+        df = yf.download(ticker, start=start, progress=False, auto_adjust=True)
+        if df.empty:
+            logger.warning(f"Equity: no data for {ticker}")
+            continue
+        price_df = df["Close"].reset_index()
+        price_df.columns = ["date", "value"]
+        price_df["date"] = pd.to_datetime(price_df["date"]).dt.date
+        upsert_series(conn, series_id=ticker.lower(),
+                      series_name=f"{ticker} Adj Close", df=price_df)
+        logger.info(f"Equity: upserted {len(price_df)} rows for {ticker}")
 
 
 # ── Entry Point ───────────────────────────────────────────────────────────────

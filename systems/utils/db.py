@@ -71,6 +71,19 @@ def initialize_schema():
         )
     """)
 
+    # Phase 2: add component score columns (safe to run on existing databases)
+    for col in ["vol_score", "credit_score", "curve_score",
+                "inflation_score", "labor_score", "positioning_score"]:
+        conn.execute(f"ALTER TABLE regime_history ADD COLUMN IF NOT EXISTS {col} DOUBLE")
+
+    for col in ["vol_as_of", "credit_as_of", "curve_as_of",
+                "inflation_as_of", "labor_as_of", "positioning_as_of"]:
+        conn.execute(f"ALTER TABLE regime_history ADD COLUMN IF NOT EXISTS {col} DATE")
+
+    conn.execute("ALTER TABLE regime_history ADD COLUMN IF NOT EXISTS confidence VARCHAR")
+    conn.execute("ALTER TABLE regime_history ADD COLUMN IF NOT EXISTS divergence_type VARCHAR")
+    conn.execute("ALTER TABLE regime_history ADD COLUMN IF NOT EXISTS divergence_severity VARCHAR")
+
     conn.execute("""
         CREATE TABLE IF NOT EXISTS fetch_log (
             series_id    VARCHAR NOT NULL,
@@ -78,6 +91,20 @@ def initialize_schema():
             rows_updated INTEGER,
             status       VARCHAR,
             error_msg    VARCHAR
+        )
+    """)
+
+    # Phase 4: macro calendar
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS macro_calendar (
+            event_name    VARCHAR NOT NULL,
+            event_date    DATE    NOT NULL,
+            category      VARCHAR NOT NULL,
+            importance    INTEGER NOT NULL,
+            component     VARCHAR,
+            source        VARCHAR,
+            updated_at    TIMESTAMP DEFAULT current_timestamp,
+            PRIMARY KEY (event_name, event_date)
         )
     """)
 

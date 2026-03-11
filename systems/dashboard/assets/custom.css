@@ -1,0 +1,2 @@
+/* Prevent horizontal overflow */
+body { overflow-x: hidden; }

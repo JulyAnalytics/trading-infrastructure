@@ -22,16 +22,20 @@ full_cot   = conn.execute("SELECT * FROM cot_positioning ORDER BY date").df()
 
 BACKFILL_FROM = "2018-01-01"
 
+# Include rows already in regime_history but missing component scores (vol_score IS NULL)
 missing = conn.execute(f"""
-    SELECT DISTINCT date FROM macro_series
-    WHERE date NOT IN (SELECT date FROM regime_history)
-    AND date >= '{BACKFILL_FROM}'
-    ORDER BY date
+    SELECT DISTINCT ms.date FROM macro_series ms
+    WHERE ms.date >= '{BACKFILL_FROM}'
+      AND (
+          ms.date NOT IN (SELECT date FROM regime_history)
+          OR ms.date IN (SELECT date FROM regime_history WHERE vol_score IS NULL)
+      )
+    ORDER BY ms.date
 """).fetchall()
 
 print(f"Backfilling {len(missing)} dates...")
 
-for (d,) in missing:
+for i, (d,) in enumerate(missing):
     ts = pd.Timestamp(d)
     snap_macro = full_macro[full_macro["date"] <= ts]
     snap_cot   = full_cot[full_cot["date"] <= ts]
@@ -40,11 +44,19 @@ for (d,) in missing:
     conn.execute("""
         INSERT OR REPLACE INTO regime_history
             (date, regime, regime_score, composite_score,
-             vix, hy_spread, yield_curve, breakeven_10y, unemp_delta)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+             vix, hy_spread, yield_curve, breakeven_10y, unemp_delta,
+             vol_score, credit_score, curve_score,
+             inflation_score, labor_score, positioning_score,
+             confidence)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, [d, result.regime, result.composite_score, result.composite_score,
           snap.vix, snap.hy_spread, snap.yield_curve_10_2,
-          snap.breakeven_10y, snap.unemp_delta_3m])
+          snap.breakeven_10y, snap.unemp_delta_3m,
+          result.vol_score, result.credit_score, result.curve_score,
+          result.inflation_score, result.labor_score, result.positioning_score,
+          result.confidence])
+    if (i + 1) % 100 == 0:
+        print(f"  {i + 1}/{len(missing)} done...")
 
 conn.close()
 print("Done.")

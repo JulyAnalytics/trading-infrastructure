@@ -127,3 +127,45 @@ CHART_BASE_LAYOUT = dict(
 # ── Logging ───────────────────────────────────────────────────────────────────
 LOG_PATH = "logs/phase1.log"
 LOG_LEVEL = "INFO"
+
+# ── Phase 2: Staleness Thresholds ─────────────────────────────────────────────
+# Threshold is set on the PRIMARY series for each component.
+# Note: Labor threshold uses claims cadence (weekly), not unemployment (monthly).
+STALENESS_THRESHOLDS_DAYS = {
+    "vol":         3,    # VIX: daily (3d accounts for weekends)
+    "credit":      3,    # HY spread: daily
+    "curve":       3,    # yield curve: daily
+    "inflation":   3,    # breakeven: daily
+    "labor":       10,   # claims: weekly (primary signal; faster than unemployment)
+    "positioning": 10,   # COT: weekly + ~3-day publication lag
+}
+
+# Separate threshold for the unemployment LEVEL within Labor
+UNEMPLOYMENT_STALE_DAYS = 45   # monthly with FRED lag
+
+# ── Phase 2: Divergence Detection Thresholds ──────────────────────────────────
+# Set a priori — calibrate after backfill using scripts/calibrate_divergence_threshold.py
+# Yield Curve collinearity note: 10Y-2Y and 10Y-3M are highly collinear.
+# Yield Curve represents one independent signal with a timing offset, not two.
+DIVERGENCE_THRESHOLD_VC = 0.6    # Vol/Credit spread
+DIVERGENCE_THRESHOLD_VL = 0.7    # Vol/Labor spread
+DIVERGENCE_MIN_CREDIT_STRESS = 0.1  # Credit must be <= this for LABOR_LAG_WARNING
+
+# ── Phase 4: Component Weights (mirrors RegimeClassifier.WEIGHTS) ─────────────
+# Kept here so dashboard and snapshot generator can read weights without
+# importing the classifier (avoids circular imports and heavy deps at startup).
+COMPONENT_WEIGHTS = {
+    "vol":         0.25,
+    "credit":      0.25,
+    "curve":       0.20,
+    "inflation":   0.10,
+    "labor":       0.15,
+    "positioning": 0.05,
+}
+
+# ── Phase 4: FOMC Schedule 2026 ───────────────────────────────────────────────
+FOMC_SCHEDULE_2026 = [
+    "2026-01-29", "2026-03-18", "2026-05-06",
+    "2026-06-17", "2026-07-29", "2026-09-16",
+    "2026-10-28", "2026-12-16",
+]

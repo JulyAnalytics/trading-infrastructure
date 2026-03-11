@@ -19,9 +19,12 @@ from loguru import logger
 from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from data_feeds.macro_feed import run_fred_pipeline, compute_derived_series, fetch_cot_data
-from signals.regime_classifier import RegimeClassifier
-from utils.db import get_connection
+from systems.data_feeds.macro_feed import (
+    run_fred_pipeline, compute_derived_series, fetch_cot_data,
+    fetch_equity_data, fetch_calendar_data, build_fred_client,
+)
+from systems.signals.regime_classifier import RegimeClassifier
+from systems.utils.db import get_connection
 
 
 def run_daily_pipeline():
@@ -68,6 +71,15 @@ def run_weekly_full_refresh():
         logger.error(f"Weekly full refresh failed: {e}")
 
 
+def run_nightly_snapshot():
+    try:
+        from systems.reports.snapshot_generator import generate_snapshot
+        path = generate_snapshot()
+        logger.info(f"Snapshot saved: {path}")
+    except Exception as e:
+        logger.error(f"Snapshot generation failed: {e}")
+
+
 if __name__ == "__main__":
     os.makedirs("logs", exist_ok=True)
     logger.add("logs/phase1.log", rotation="1 week", retention="4 weeks")
@@ -84,6 +96,21 @@ if __name__ == "__main__":
 
     # Weekly full refresh on Sunday evening
     schedule.every().sunday.at("20:00").do(run_weekly_full_refresh)
+
+    # Phase 4: weekly calendar fetch (Sunday after full refresh)
+    schedule.every().sunday.at("20:05").do(
+        lambda: fetch_calendar_data(build_fred_client(), get_connection())
+    )
+
+    # Phase 4: daily SPY equity fetch
+    schedule.every().day.at("18:05").do(
+        lambda: fetch_equity_data(get_connection())
+    )
+
+    # Phase 4: nightly snapshot, weekdays only (single lambda)
+    schedule.every().day.at("18:15").do(
+        lambda: run_nightly_snapshot() if datetime.today().weekday() < 5 else None
+    )
 
     logger.info("Scheduler running. Press Ctrl+C to stop.")
     while True:

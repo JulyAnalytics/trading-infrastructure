@@ -55,6 +55,15 @@ class MacroSnapshot:
     cot_sp500_z:      float  = None   # z-score of spec positioning
     missing_inputs:   list   = field(default_factory=list)
 
+    # Phase 2: date of most recent row for each series
+    vix_date:           date  = None
+    hy_spread_date:     date  = None
+    curve_date:         date  = None   # yield_curve_10_2
+    breakeven_date:     date  = None
+    unemployment_date:  date  = None   # monthly — the slow one
+    claims_date:        date  = None   # weekly — moves faster than unemployment
+    cot_date:           date  = None
+
 
 @dataclass
 class RegimeResult:
@@ -80,6 +89,18 @@ class RegimeResult:
     # Raw snapshot used
     snapshot:         MacroSnapshot = field(default_factory=MacroSnapshot)
 
+    # Phase 2: per-component as-of dates
+    vol_as_of:         date  = None   # vix_date
+    credit_as_of:      date  = None   # hy_spread_date
+    curve_as_of:       date  = None   # curve_date
+    inflation_as_of:   date  = None   # breakeven_date
+    labor_as_of:       date  = None   # max(unemployment_date, claims_date)
+    labor_level_as_of: date  = None   # unemployment_date alone — for tooltip detail
+    positioning_as_of: date  = None   # cot_date
+
+    # Phase 2: divergence signal
+    divergence:        dict  = None
+
     def __str__(self):
         lines = [
             f"═══ REGIME STATE: {self.regime} ═══",
@@ -104,6 +125,116 @@ class RegimeResult:
             lines += ["", "⚠ Warnings:"]
             lines += [f"  ! {w}" for w in self.warnings]
         return "\n".join(lines)
+
+    # ── Phase 2: Attribution ───────────────────────────────────────────────────
+
+    def attribution(self) -> dict:
+        weights = RegimeClassifier.WEIGHTS
+        components = {
+            "Vol":         (self.vol_score,          weights["vol"]),
+            "Credit":      (self.credit_score,        weights["credit"]),
+            "Yield Curve": (self.curve_score,         weights["curve"]),
+            "Inflation":   (self.inflation_score,     weights["inflation"]),
+            "Labor":       (self.labor_score,         weights["labor"]),
+            "Positioning": (self.positioning_score,   weights["positioning"]),
+        }
+
+        regime_direction = 1 if self.composite_score >= 0 else -1
+        drivers, contradictors = {}, {}
+
+        for name, (score, weight) in components.items():
+            contribution = round(score * weight, 4)
+            entry = {"score": score, "weight": weight, "contribution": contribution}
+            if score * regime_direction > 0:
+                drivers[name] = entry
+            elif score != 0:
+                contradictors[name] = entry
+
+        top_drivers = sorted(drivers.items(), key=lambda x: abs(x[1]["contribution"]), reverse=True)
+
+        nearest_gap = self._nearest_threshold_gap()
+        flip_watch = [
+            {
+                "component":           name,
+                "score_change_needed": round(nearest_gap / data["weight"], 2),
+                "current_score":       data["score"],
+                "contribution":        data["contribution"],
+            }
+            for name, data in top_drivers[:2]
+        ]
+
+        return {
+            "drivers":        dict(top_drivers),
+            "contradictors":  contradictors,
+            "flip_watch":     flip_watch,
+            "composite":      self.composite_score,
+            "nearest_regime": self._nearest_adjacent_regime(),
+            "nearest_gap":    round(nearest_gap, 3),
+        }
+
+    def _nearest_threshold_gap(self) -> float:
+        gaps = [abs(self.composite_score - t)
+                for t, _ in RegimeClassifier.SCORE_TO_REGIME]
+        return min(gaps)
+
+    def _nearest_adjacent_regime(self) -> str:
+        for i, (threshold, label) in enumerate(RegimeClassifier.SCORE_TO_REGIME):
+            if self.composite_score >= threshold:
+                if i + 1 < len(RegimeClassifier.SCORE_TO_REGIME):
+                    return RegimeClassifier.SCORE_TO_REGIME[i + 1][1]
+                break
+        return "CRISIS"
+
+    def regime_change_probability(self, history_df: "pd.DataFrame | None" = None) -> dict:
+        """
+        Heuristic 30-day regime change probability.
+        Three inputs:
+          1. Distance from nearest threshold (from attribution)
+          2. Rate of composite score change over last 10 trading days
+          3. Whether a HIGH/MEDIUM divergence signal is active
+        """
+        attr = self.attribution()
+        gap  = attr["nearest_gap"]
+
+        # Factor 1: threshold proximity (closer → higher probability)
+        proximity_factor = 1.0 - min(gap / 0.5, 1.0)
+
+        # Factor 2: score momentum over last 10 days
+        momentum_factor = 0.0
+        momentum_desc   = None
+        if history_df is not None and len(history_df) >= 10:
+            recent = history_df.sort_values("date").tail(10)
+            if "composite_score" in recent.columns:
+                delta = recent["composite_score"].iloc[-1] - recent["composite_score"].iloc[0]
+                weekly_rate  = delta / 2
+                moving_toward = (delta < 0 and self.composite_score > 0) or \
+                                (delta > 0 and self.composite_score < 0)
+                momentum_factor = min(abs(weekly_rate) * 2, 0.4) if moving_toward else 0.0
+                if abs(weekly_rate) > 0.05:
+                    direction = "deteriorating" if delta < 0 else "improving"
+                    momentum_desc = f"Score {direction} ({delta:+.2f} over 10d)"
+
+        # Factor 3: active divergence signal
+        divergence_factor = 0.0
+        if self.divergence:
+            divergence_factor = 0.20 if self.divergence["severity"] == "HIGH" else 0.10
+
+        raw_prob    = min(proximity_factor * 0.5 + momentum_factor + divergence_factor, 0.85)
+        probability = max(raw_prob, 0.05)
+
+        drivers = [f"Score {self.composite_score:+.2f} → "
+                   f"{attr['nearest_regime']} boundary at {gap:.2f} away"]
+        if momentum_desc:
+            drivers.append(momentum_desc)
+        if self.divergence:
+            drivers.append(f"{self.divergence['label']} active")
+
+        return {
+            "probability": round(probability, 2),
+            "label":       f"~{int(probability * 100)}%",
+            "toward":      attr["nearest_regime"],
+            "drivers":     drivers,
+        }
 
 
 # ── Classifier ────────────────────────────────────────────────────────────────
@@ -142,35 +273,48 @@ class RegimeClassifier:
     # ── Data Loading ──────────────────────────────────────────────────────────
 
     def _load_snapshot(self) -> MacroSnapshot:
-        snap = MacroSnapshot()
+        snap    = MacroSnapshot()
         missing = []
+        _cache  = {}
 
-        def latest(series_id: str) -> dict | None:
-            return get_latest(self.conn, series_id)
+        def latest(series_id: str) -> "dict | None":
+            if series_id not in _cache:
+                _cache[series_id] = get_latest(self.conn, series_id)
+            return _cache[series_id]
 
-        def val(series_id: str) -> float | None:
+        def val(series_id: str) -> "float | None":
             row = latest(series_id)
             if row is None:
                 missing.append(series_id)
                 return None
             return row["value"]
 
-        def z(series_id: str) -> float | None:
+        def z(series_id: str) -> "float | None":
             row = latest(series_id)
             return row["z_1y"] if row else None
 
+        def dt(series_id: str):
+            row = latest(series_id)
+            return row["date"] if row else None
+
         snap.vix              = val("vix")
         snap.vix_z1y          = z("vix")
+        snap.vix_date         = dt("vix")
         snap.hy_spread        = val("hy_spread")
+        snap.hy_spread_date   = dt("hy_spread")
         snap.ig_spread        = val("ig_spread")
         snap.yield_curve_10_2 = val("yield_curve_10_2")
+        snap.curve_date       = dt("yield_curve_10_2")
         snap.yield_curve_10_3 = val("yield_curve_10_3")
         snap.breakeven_10y    = val("breakeven_10y")
+        snap.breakeven_date   = dt("breakeven_10y")
         snap.real_rate_10y    = val("real_rate_10y")
         snap.unemployment     = val("unemployment")
+        snap.unemployment_date = dt("unemployment")
         snap.m2_yoy           = val("m2_yoy_growth")
         snap.jobless_claims   = val("jobless_claims")
         snap.claims_z1y       = z("jobless_claims")
+        snap.claims_date      = dt("jobless_claims")
         snap.oil_chg_3m       = latest("oil_wti")["chg_1m"] if latest("oil_wti") else None
 
         # Unemployment delta: compare last reading to 3 months ago
@@ -180,22 +324,98 @@ class RegimeClassifier:
                 unemp_hist["value"].iloc[-1] - unemp_hist["value"].iloc[-3]
             )
 
-        # COT SP500 z-score
+        # COT SP500 z-score + date
         cot = self.conn.execute("""
-            SELECT z_score_1y FROM cot_positioning
+            SELECT z_score_1y, date FROM cot_positioning
             WHERE instrument = 'SP500'
             ORDER BY date DESC LIMIT 1
         """).fetchone()
         if cot:
             snap.cot_sp500_z = cot[0]
+            snap.cot_date    = cot[1]
 
         snap.missing_inputs = missing
         snap.as_of = date.today()
         return snap
 
+    def _load_snapshot_from_df(self, macro_df: pd.DataFrame, cot_df: pd.DataFrame) -> MacroSnapshot:
+        """Replicate _load_snapshot() using pre-loaded DataFrames instead of DB calls."""
+        snap    = MacroSnapshot()
+        missing = []
+
+        def get_val(series_id: str) -> "float | None":
+            sub = macro_df[macro_df["series_id"] == series_id]
+            if sub.empty:
+                missing.append(series_id)
+                return None
+            return sub.iloc[-1]["value"]
+
+        def get_z(series_id: str) -> "float | None":
+            sub = macro_df[macro_df["series_id"] == series_id]
+            if sub.empty:
+                return None
+            row = sub.iloc[-1]
+            return row.get("z_1y") if "z_1y" in row.index else None
+
+        def get_chg(series_id: str) -> "float | None":
+            sub = macro_df[macro_df["series_id"] == series_id]
+            if sub.empty:
+                return None
+            row = sub.iloc[-1]
+            return row.get("chg_1m") if "chg_1m" in row.index else None
+
+        def get_date_val(series_id: str):
+            sub = macro_df[macro_df["series_id"] == series_id]
+            if sub.empty:
+                return None
+            d = sub.iloc[-1]["date"]
+            if hasattr(d, "date"):
+                return d.date()
+            if isinstance(d, str):
+                return date.fromisoformat(d[:10])
+            return d
+
+        snap.vix               = get_val("vix")
+        snap.vix_z1y           = get_z("vix")
+        snap.vix_date          = get_date_val("vix")
+        snap.hy_spread         = get_val("hy_spread")
+        snap.hy_spread_date    = get_date_val("hy_spread")
+        snap.ig_spread         = get_val("ig_spread")
+        snap.yield_curve_10_2  = get_val("yield_curve_10_2")
+        snap.curve_date        = get_date_val("yield_curve_10_2")
+        snap.yield_curve_10_3  = get_val("yield_curve_10_3")
+        snap.breakeven_10y     = get_val("breakeven_10y")
+        snap.breakeven_date    = get_date_val("breakeven_10y")
+        snap.real_rate_10y     = get_val("real_rate_10y")
+        snap.unemployment      = get_val("unemployment")
+        snap.unemployment_date = get_date_val("unemployment")
+        snap.m2_yoy            = get_val("m2_yoy_growth")
+        snap.jobless_claims    = get_val("jobless_claims")
+        snap.claims_z1y        = get_z("jobless_claims")
+        snap.claims_date       = get_date_val("jobless_claims")
+        snap.oil_chg_3m        = get_chg("oil_wti")
+
+        # Unemployment delta
+        unemp_sub = macro_df[macro_df["series_id"] == "unemployment"]
+        if len(unemp_sub) >= 3:
+            snap.unemp_delta_3m = (
+                unemp_sub["value"].iloc[-1] - unemp_sub["value"].iloc[-3]
+            )
+
+        # COT SP500
+        cot_sub = cot_df[cot_df["instrument"] == "SP500"] if not cot_df.empty else pd.DataFrame()
+        if not cot_sub.empty:
+            snap.cot_sp500_z = cot_sub.iloc[-1]["z_score_1y"]
+            d = cot_sub.iloc[-1]["date"]
+            snap.cot_date = d.date() if hasattr(d, "date") else d
+
+        snap.missing_inputs = missing
+        snap.as_of = macro_df["date"].max().date() if not macro_df.empty else date.today()
+        return snap
+
     # ── Component Scorers  (-1 = bearish, 0 = neutral, +1 = bullish) ─────────
 
-    def _score_vol(self, snap: MacroSnapshot) -> tuple[float, list, list]:
+    def _score_vol(self, snap: MacroSnapshot) -> "tuple[float, list, list]":
         """VIX level and trend."""
         bullish, bearish = [], []
         if snap.vix is None:
@@ -229,7 +449,7 @@ class RegimeClassifier:
 
         return max(-1.0, min(1.0, score)), bullish, bearish
 
-    def _score_credit(self, snap: MacroSnapshot) -> tuple[float, list, list]:
+    def _score_credit(self, snap: MacroSnapshot) -> "tuple[float, list, list]":
         """HY and IG credit spreads."""
         bullish, bearish = [], []
         if snap.hy_spread is None:
@@ -254,10 +474,10 @@ class RegimeClassifier:
 
         return max(-1.0, min(1.0, score)), bullish, bearish
 
-    def _score_curve(self, snap: MacroSnapshot) -> tuple[float, list, list]:
+    def _score_curve(self, snap: MacroSnapshot) -> "tuple[float, list, list]":
         """Yield curve shape — powerful but lagging."""
         bullish, bearish = [], []
-        t = REGIME_THRESHOLDS["yield_curve_10_2"]
+        t     = REGIME_THRESHOLDS["yield_curve_10_2"]
         curve = snap.yield_curve_10_2
 
         if curve is None:
@@ -288,10 +508,10 @@ class RegimeClassifier:
 
         return max(-1.0, min(1.0, score)), bullish, bearish
 
-    def _score_inflation(self, snap: MacroSnapshot) -> tuple[float, list, list]:
+    def _score_inflation(self, snap: MacroSnapshot) -> "tuple[float, list, list]":
         """Inflation regime — affects Fed policy space."""
         bullish, bearish = [], []
-        t = REGIME_THRESHOLDS["breakeven_10y"]
+        t  = REGIME_THRESHOLDS["breakeven_10y"]
         be = snap.breakeven_10y
 
         if be is None:
@@ -321,7 +541,7 @@ class RegimeClassifier:
 
         return max(-1.0, min(1.0, score)), bullish, bearish
 
-    def _score_labor(self, snap: MacroSnapshot) -> tuple[float, list, list]:
+    def _score_labor(self, snap: MacroSnapshot) -> "tuple[float, list, list]":
         """Labor market conditions — lagging but crucial for policy."""
         bullish, bearish = [], []
         score = 0.0
@@ -357,7 +577,7 @@ class RegimeClassifier:
 
         return max(-1.0, min(1.0, score)), bullish, bearish
 
-    def _score_positioning(self, snap: MacroSnapshot) -> tuple[float, list, list]:
+    def _score_positioning(self, snap: MacroSnapshot) -> "tuple[float, list, list]":
         """
         Contrarian: extreme long positioning is bearish (crowded),
         extreme short is bullish (squeezable).
@@ -384,6 +604,86 @@ class RegimeClassifier:
 
         return score, bullish, bearish
 
+    # ── Phase 2: Divergence Detection ─────────────────────────────────────────
+
+    def _score_divergence(self, result: RegimeResult) -> "dict | None":
+        from config import (DIVERGENCE_THRESHOLD_VC, DIVERGENCE_THRESHOLD_VL,
+                            DIVERGENCE_MIN_CREDIT_STRESS)
+
+        vol    = result.vol_score
+        credit = result.credit_score
+        labor  = result.labor_score
+        curve  = result.curve_score
+
+        # ── Primary: Vol vs Credit ────────────────────────────────────────────
+        spread_vc = abs(vol - credit)
+        if spread_vc >= DIVERGENCE_THRESHOLD_VC:
+            if vol > 0 and credit < 0:
+                return {
+                    "type":       "LEADING_STRESS_WARNING",
+                    "severity":   "HIGH",
+                    "label":      "Vol calm, Credit stressed",
+                    "detail":     (
+                        f"Credit pricing deterioration ({credit:+.2f}) "
+                        f"while vol contained ({vol:+.2f}). "
+                        "Historically precedes vol spike. "
+                        "Threshold set a priori — calibrate against backfill."
+                    ),
+                    "components": ["vol", "credit"],
+                    "spread":     round(spread_vc, 3),
+                }
+            elif vol < 0 and credit > 0:
+                return {
+                    "type":       "ELEVATED_VOL_UNCONFIRMED",
+                    "severity":   "MEDIUM",
+                    "label":      "Vol stressed, Credit not confirming",
+                    "detail":     (
+                        f"Vol elevated ({vol:+.2f}) but credit calm ({credit:+.2f}). "
+                        "Often technical — geopolitical spike or positioning unwind. "
+                        "Lower persistence than Config A."
+                    ),
+                    "components": ["vol", "credit"],
+                    "spread":     round(spread_vc, 3),
+                }
+
+        # ── Secondary: Vol vs Labor ───────────────────────────────────────────
+        # Guard: only fire if credit is also stressed — prevents geopolitical false fires.
+        # Explicit precedence: if Vol/Credit already fired, this branch is never reached.
+        spread_vl = abs(vol - labor)
+        if (spread_vl >= DIVERGENCE_THRESHOLD_VL
+                and vol < 0 and labor > 0
+                and credit <= DIVERGENCE_MIN_CREDIT_STRESS):
+            return {
+                "type":       "LABOR_LAG_WARNING",
+                "severity":   "MEDIUM",
+                "label":      "Vol & Credit stressed, Labor lagging",
+                "detail":     (
+                    f"Vol ({vol:+.2f}) and credit ({credit:+.2f}) signaling stress "
+                    f"while labor remains strong ({labor:+.2f}). "
+                    "Labor is lagging — watch claims for leading confirmation."
+                ),
+                "components": ["vol", "credit", "labor"],
+                "spread":     round(spread_vl, 3),
+            }
+
+        # ── Tertiary: Broad component disagreement ────────────────────────────
+        all_scores = [vol, credit, curve, labor]
+        spread_all = max(all_scores) - min(all_scores)
+        if spread_all >= 1.2:
+            return {
+                "type":       "BROAD_COMPONENT_DIVERGENCE",
+                "severity":   "LOW",
+                "label":      "Component disagreement detected",
+                "detail":     (
+                    f"Max component spread: {spread_all:.2f}. "
+                    "Mixed signals — elevated regime transition risk."
+                ),
+                "components": [],
+                "spread":     round(spread_all, 3),
+            }
+
+        return None
+
     # ── Main Classify ─────────────────────────────────────────────────────────
 
     def classify(self, persist: bool = True) -> RegimeResult:
@@ -403,62 +703,6 @@ class RegimeClassifier:
         """
         snap = self._load_snapshot_from_df(macro_df, cot_df)
         return self._score_and_build_result(snap, persist=False)
-
-    def _load_snapshot_from_df(self, macro_df: pd.DataFrame, cot_df: pd.DataFrame) -> MacroSnapshot:
-        """Replicate _load_snapshot() using pre-loaded DataFrames instead of DB calls."""
-        snap = MacroSnapshot()
-        missing = []
-
-        def get_val(series_id: str) -> float | None:
-            sub = macro_df[macro_df["series_id"] == series_id]
-            if sub.empty:
-                missing.append(series_id)
-                return None
-            return sub.iloc[-1]["value"]
-
-        def get_z(series_id: str) -> float | None:
-            sub = macro_df[macro_df["series_id"] == series_id]
-            if sub.empty:
-                return None
-            row = sub.iloc[-1]
-            return row.get("z_1y") if "z_1y" in row.index else None
-
-        def get_chg(series_id: str) -> float | None:
-            sub = macro_df[macro_df["series_id"] == series_id]
-            if sub.empty:
-                return None
-            row = sub.iloc[-1]
-            return row.get("chg_1m") if "chg_1m" in row.index else None
-
-        snap.vix              = get_val("vix")
-        snap.vix_z1y          = get_z("vix")
-        snap.hy_spread        = get_val("hy_spread")
-        snap.ig_spread        = get_val("ig_spread")
-        snap.yield_curve_10_2 = get_val("yield_curve_10_2")
-        snap.yield_curve_10_3 = get_val("yield_curve_10_3")
-        snap.breakeven_10y    = get_val("breakeven_10y")
-        snap.real_rate_10y    = get_val("real_rate_10y")
-        snap.unemployment     = get_val("unemployment")
-        snap.m2_yoy           = get_val("m2_yoy_growth")
-        snap.jobless_claims   = get_val("jobless_claims")
-        snap.claims_z1y       = get_z("jobless_claims")
-        snap.oil_chg_3m       = get_chg("oil_wti")
-
-        # Unemployment delta: compare last reading to 3 months ago
-        unemp_sub = macro_df[macro_df["series_id"] == "unemployment"]
-        if len(unemp_sub) >= 3:
-            snap.unemp_delta_3m = (
-                unemp_sub["value"].iloc[-1] - unemp_sub["value"].iloc[-3]
-            )
-
-        # COT SP500 z-score
-        cot_sub = cot_df[cot_df["instrument"] == "SP500"] if not cot_df.empty else pd.DataFrame()
-        if not cot_sub.empty:
-            snap.cot_sp500_z = cot_sub.iloc[-1]["z_score_1y"]
-
-        snap.missing_inputs = missing
-        snap.as_of = macro_df["date"].max().date() if not macro_df.empty else date.today()
-        return snap
 
     def _score_and_build_result(self, snap: MacroSnapshot, persist: bool = True) -> RegimeResult:
         """Score all components, build RegimeResult, optionally persist."""
@@ -486,12 +730,10 @@ class RegimeClassifier:
                 break
 
         # Confidence: HIGH if 4+ components agree, LOW if split
-        component_scores = [
-            vol_score, cred_score, curv_score, infl_score, lab_score
-        ]
-        positives = sum(s > 0 for s in component_scores)
-        negatives = sum(s < 0 for s in component_scores)
-        agreement = max(positives, negatives) / len(component_scores)
+        component_scores = [vol_score, cred_score, curv_score, infl_score, lab_score]
+        positives  = sum(s > 0 for s in component_scores)
+        negatives  = sum(s < 0 for s in component_scores)
+        agreement  = max(positives, negatives) / len(component_scores)
 
         if agreement >= 0.8:
             confidence = "HIGH"
@@ -501,21 +743,34 @@ class RegimeClassifier:
             confidence = "LOW"
 
         result = RegimeResult(
-            regime           = regime,
-            composite_score  = round(composite, 3),
-            confidence       = confidence,
-            as_of            = snap.as_of,
-            vol_score        = round(vol_score, 3),
-            credit_score     = round(cred_score, 3),
-            curve_score      = round(curv_score, 3),
-            inflation_score  = round(infl_score, 3),
-            labor_score      = round(lab_score, 3),
-            positioning_score= round(pos_score, 3),
-            bullish_signals  = vol_bull + cred_bull + curv_bull + infl_bull + lab_bull + pos_bull,
-            bearish_signals  = vol_bear + cred_bear + curv_bear + infl_bear + lab_bear + pos_bear,
-            warnings         = [f"Missing data: {s}" for s in snap.missing_inputs],
-            snapshot         = snap,
+            regime            = regime,
+            composite_score   = round(composite, 3),
+            confidence        = confidence,
+            as_of             = snap.as_of,
+            vol_score         = round(vol_score, 3),
+            credit_score      = round(cred_score, 3),
+            curve_score       = round(curv_score, 3),
+            inflation_score   = round(infl_score, 3),
+            labor_score       = round(lab_score, 3),
+            positioning_score = round(pos_score, 3),
+            bullish_signals   = vol_bull + cred_bull + curv_bull + infl_bull + lab_bull + pos_bull,
+            bearish_signals   = vol_bear + cred_bear + curv_bear + infl_bear + lab_bear + pos_bear,
+            warnings          = [f"Missing data: {s}" for s in snap.missing_inputs],
+            snapshot          = snap,
         )
+
+        # Phase 2: populate per-component as-of dates
+        result.vol_as_of         = snap.vix_date
+        result.credit_as_of      = snap.hy_spread_date
+        result.curve_as_of       = snap.curve_date
+        result.inflation_as_of   = snap.breakeven_date
+        dates = [d for d in [snap.unemployment_date, snap.claims_date] if d is not None]
+        result.labor_as_of       = max(dates) if dates else None
+        result.labor_level_as_of = snap.unemployment_date
+        result.positioning_as_of = snap.cot_date
+
+        # Phase 2: divergence signal
+        result.divergence = self._score_divergence(result)
 
         if persist:
             self._persist(result)
@@ -525,21 +780,28 @@ class RegimeClassifier:
     def _persist(self, result: RegimeResult):
         """Save regime result to history table."""
         snap = result.snapshot
+        div  = result.divergence or {}
         self.conn.execute("""
             INSERT OR REPLACE INTO regime_history
                 (date, regime, regime_score, vix, hy_spread, yield_curve,
-                 breakeven_10y, unemp_delta, composite_score)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 breakeven_10y, unemp_delta, composite_score,
+                 vol_score, credit_score, curve_score,
+                 inflation_score, labor_score, positioning_score,
+                 confidence,
+                 vol_as_of, credit_as_of, curve_as_of,
+                 inflation_as_of, labor_as_of, positioning_as_of,
+                 divergence_type, divergence_severity)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """, [
-            result.as_of,
-            result.regime,
-            result.composite_score,
-            snap.vix,
-            snap.hy_spread,
-            snap.yield_curve_10_2,
-            snap.breakeven_10y,
-            snap.unemp_delta_3m,
-            result.composite_score,
+            result.as_of, result.regime, result.composite_score,
+            snap.vix, snap.hy_spread, snap.yield_curve_10_2,
+            snap.breakeven_10y, snap.unemp_delta_3m, result.composite_score,
+            result.vol_score, result.credit_score, result.curve_score,
+            result.inflation_score, result.labor_score, result.positioning_score,
+            result.confidence,
+            result.vol_as_of, result.credit_as_of, result.curve_as_of,
+            result.inflation_as_of, result.labor_as_of, result.positioning_as_of,
+            div.get("type"), div.get("severity"),
         ])
 
     def get_history(self, lookback_days: int = 252) -> pd.DataFrame:
