@@ -14,6 +14,7 @@ FRED_API_KEY = os.getenv("FRED_API_KEY", "")   # free at fred.stlouisfed.org/doc
 
 # ── Database ──────────────────────────────────────────────────────────────────
 DUCKDB_PATH = "data/processed/macro.db"
+OUTPUTS_DIR = "data/outputs"
 
 # ── FRED Series ───────────────────────────────────────────────────────────────
 # Format: { internal_name: (fred_series_id, human_label, update_frequency) }
@@ -49,6 +50,7 @@ MACRO_SERIES = {
     "core_cpi":         ("CPILFESL",    "Core CPI (ex F&E)",        "monthly"),
     "pce":              ("PCE",         "PCE Price Index",          "monthly"),
     "breakeven_10y":    ("T10YIE",      "10Y Breakeven Inflation",  "daily"),
+    "forward_breakeven_5y5y": ("T5YIFR", "5Y5Y Forward Inflation Breakeven", "daily"),
 
     # Money & Liquidity
     "m2":               ("M2SL",        "M2 Money Supply",          "weekly"),

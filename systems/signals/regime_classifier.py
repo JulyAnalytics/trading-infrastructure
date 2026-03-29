@@ -25,9 +25,10 @@ import os
 from dataclasses import dataclass, field
 from datetime import date, datetime
 import pandas as pd
+from loguru import logger
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..'))
-from config import REGIME_THRESHOLDS, DUCKDB_PATH
+from config import REGIME_THRESHOLDS, DUCKDB_PATH, COMPONENT_WEIGHTS
 from systems.utils.db import get_connection, get_latest, get_series_history
 
 
@@ -45,6 +46,10 @@ class MacroSnapshot:
     yield_curve_10_3: float  = None   # bps
     breakeven_10y:    float  = None
     real_rate_10y:    float  = None
+    pce:              float  = None   # PCE price index YoY (derived — see macro_feed)
+    pce_date:         date   = None
+    forward_breakeven_5y5y: float = None   # T5YIFR — 5y5y fwd inflation expectation
+    forward_breakeven_date: date  = None
     unemployment:     float  = None
     unemp_delta_3m:   float  = None   # change over last 3 months
     nfp_3m_avg:       float  = None   # 3-month avg job adds (000s)
@@ -129,7 +134,7 @@ class RegimeResult:
     # ── Phase 2: Attribution ───────────────────────────────────────────────────
 
     def attribution(self) -> dict:
-        weights = RegimeClassifier.WEIGHTS
+        weights = COMPONENT_WEIGHTS
         components = {
             "Vol":         (self.vol_score,          weights["vol"]),
             "Credit":      (self.credit_score,        weights["credit"]),
@@ -247,15 +252,9 @@ class RegimeClassifier:
     Weights are intentionally transparent — change them in config.py.
     """
 
-    # Component weights — must sum to 1.0
-    WEIGHTS = {
-        "vol":         0.25,   # VIX is the fastest signal
-        "credit":      0.25,   # HY spread is co-leading
-        "curve":       0.20,   # yield curve is slower but powerful
-        "inflation":   0.10,   # affects policy regime
-        "labor":       0.15,   # unemployment is lagging but matters
-        "positioning": 0.05,   # COT is noisy — low weight
-    }
+    # Single source of truth — defined in config.py
+    # Do not redefine here. Update config.py to change weights.
+    WEIGHTS = None  # set in __init__
 
     # Composite score → regime mapping
     SCORE_TO_REGIME = [
@@ -268,6 +267,8 @@ class RegimeClassifier:
     ]
 
     def __init__(self, db_path: str = DUCKDB_PATH):
+        from config import COMPONENT_WEIGHTS
+        self.WEIGHTS = COMPONENT_WEIGHTS
         self.conn = get_connection()
 
     # ── Data Loading ──────────────────────────────────────────────────────────
@@ -309,6 +310,13 @@ class RegimeClassifier:
         snap.breakeven_10y    = val("breakeven_10y")
         snap.breakeven_date   = dt("breakeven_10y")
         snap.real_rate_10y    = val("real_rate_10y")
+        pce_row = latest("pce")
+        if pce_row is None:
+            missing.append("pce")
+        snap.pce      = pce_row["chg_12m"] if pce_row else None
+        snap.pce_date = pce_row["date"] if pce_row else None
+        snap.forward_breakeven_5y5y = val("forward_breakeven_5y5y")
+        snap.forward_breakeven_date = dt("forward_breakeven_5y5y")
         snap.unemployment     = val("unemployment")
         snap.unemployment_date = dt("unemployment")
         snap.m2_yoy           = val("m2_yoy_growth")
@@ -387,6 +395,16 @@ class RegimeClassifier:
         snap.breakeven_10y     = get_val("breakeven_10y")
         snap.breakeven_date    = get_date_val("breakeven_10y")
         snap.real_rate_10y     = get_val("real_rate_10y")
+        pce_sub = macro_df[macro_df["series_id"] == "pce"]
+        if pce_sub.empty:
+            missing.append("pce")
+        else:
+            _pce_row = pce_sub.iloc[-1]
+            snap.pce = _pce_row.get("pct_chg_12m") if "pct_chg_12m" in _pce_row.index else None
+            _pce_d = _pce_row["date"]
+            snap.pce_date = _pce_d.date() if hasattr(_pce_d, "date") else _pce_d
+        snap.forward_breakeven_5y5y = get_val("forward_breakeven_5y5y")
+        snap.forward_breakeven_date = get_date_val("forward_breakeven_5y5y")
         snap.unemployment      = get_val("unemployment")
         snap.unemployment_date = get_date_val("unemployment")
         snap.m2_yoy            = get_val("m2_yoy_growth")
@@ -538,6 +556,26 @@ class RegimeClassifier:
             elif snap.real_rate_10y < 0:
                 score += 0.2
                 bullish.append(f"Real rates negative — supportive for risk ({snap.real_rate_10y:.2f}%)")
+
+        # PCE YoY: supplementary inflation signal (lagging, minor weight)
+        if snap.pce is not None:
+            pce_yoy = snap.pce
+            if pce_yoy > 3.0:
+                score -= 0.08
+                bearish.append(f"PCE YoY {pce_yoy:.1f}% — above Fed target")
+            elif pce_yoy < 2.0:
+                score += 0.05
+                bullish.append(f"PCE YoY {pce_yoy:.1f}% — contained")
+
+        # 5y5y forward breakeven: long-run inflation expectations
+        if snap.forward_breakeven_5y5y is not None:
+            fwd = snap.forward_breakeven_5y5y
+            if fwd > 2.75:
+                score -= 0.10
+                bearish.append(f"5y5y fwd breakeven {fwd:.2f}% — long-run expectations elevated")
+            elif fwd < 2.10:
+                score += 0.07
+                bullish.append(f"5y5y fwd breakeven {fwd:.2f}% — long-run expectations anchored")
 
         return max(-1.0, min(1.0, score)), bullish, bearish
 
@@ -693,6 +731,47 @@ class RegimeClassifier:
         """
         snap = self._load_snapshot()
         return self._score_and_build_result(snap, persist=persist)
+
+    def write_output_contract(self, result) -> None:
+        """
+        Write regime_state.json to data/outputs/.
+        Called after every successful classify() in the daily pipeline.
+        This file is the prerequisite input for all downstream components
+        (Sarah, Jordan, Kai, etc.).
+        """
+        import json
+        from pathlib import Path
+        from datetime import datetime
+        from config import OUTPUTS_DIR
+
+        component_scores = {
+            "vol":         getattr(result, "vol_score",         None),
+            "credit":      getattr(result, "credit_score",      None),
+            "curve":       getattr(result, "curve_score",       None),
+            "inflation":   getattr(result, "inflation_score",   None),
+            "labor":       getattr(result, "labor_score",       None),
+            "positioning": getattr(result, "positioning_score", None),
+        }
+
+        divergence = getattr(result, "divergence", None)
+        divergence_type = divergence.get("type") if divergence else None
+
+        output = {
+            "regime_state":     getattr(result, "regime",          None),
+            "composite_score":  getattr(result, "composite_score", None),
+            "component_scores": component_scores,
+            "confidence":       getattr(result, "confidence",      None),
+            "divergence_type":  divergence_type,
+            "as_of":            str(getattr(result, "as_of",       "")),
+            "missing_inputs":   getattr(result.snapshot, "missing_inputs", []),
+            "written_at":       datetime.now().isoformat(),
+        }
+
+        path = Path(OUTPUTS_DIR) / "regime_state.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(output, indent=2, default=str))
+        logger.info(f"regime_state.json written — {output['regime_state']} "
+                    f"(score: {output['composite_score']:.3f})")
 
     def classify_from_df(self, macro_df: pd.DataFrame, cot_df: pd.DataFrame) -> RegimeResult:
         """

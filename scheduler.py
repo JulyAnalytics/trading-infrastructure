@@ -52,6 +52,7 @@ def run_daily_pipeline():
     try:
         clf = RegimeClassifier()
         result = clf.classify(persist=True)
+        clf.write_output_contract(result)
         logger.info(f"Regime classified: {result.regime} (score: {result.composite_score:+.2f})")
         logger.info(str(result))
     except Exception as e:

@@ -35,3 +35,6 @@ env/
 # IDE
 .vscode/
 .idea/
+
+# Runtime output contracts — not committed
+data/outputs/*.json
