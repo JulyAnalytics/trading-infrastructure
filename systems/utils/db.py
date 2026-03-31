@@ -16,9 +16,9 @@ from loguru import logger
 from config import DUCKDB_PATH
 
 
-def get_connection() -> duckdb.DuckDBPyConnection:
-    """Return a connection to the macro database."""
-    return duckdb.connect(DUCKDB_PATH)
+def get_connection(db_path: str = DUCKDB_PATH) -> duckdb.DuckDBPyConnection:
+    """Return a connection to the specified database (defaults to macro.db)."""
+    return duckdb.connect(db_path)
 
 
 def initialize_schema():

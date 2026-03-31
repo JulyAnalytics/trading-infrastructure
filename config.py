@@ -165,6 +165,33 @@ COMPONENT_WEIGHTS = {
     "positioning": 0.05,
 }
 
+# ── Sarah: Vol Surface Layer ──────────────────────────────────────────────────
+# Separate DuckDB for vol surface data (keeps macro.db unmodified)
+VOL_DB_PATH = "data/processed/trading.db"
+
+# Tickers for daily vol surface ingestion
+VOL_TICKERS = ["SPY", "QQQ", "IWM", "XLE", "GLD"]
+
+# FRED series for DTE-matched risk-free rate (3-month T-bill as default proxy)
+FRED_RISK_FREE_SERIES = "DGS3MO"
+
+# Minimum history days before IVR/IVP is considered reliable
+VOL_IVR_MIN_HISTORY_DAYS = 60
+
+# ── Sarah: Stage 4 Pre-Trade Dashboard ───────────────────────────────────────
+# Catalyst type enum for term structure analysis (replaces direction label)
+CATALYST_TYPES = ("macro_slow", "macro_catalyst", "event_specific", "technical")
+
+# Flow observation notes field max length
+MAX_FLOW_NOTES_LENGTH = 200
+
+# ── Sarah: Stage 5 Historical Regime Library ─────────────────────────────────
+# Minimum history days before analog search results are trusted
+ANALOG_MIN_HISTORY_DAYS = 120
+
+# Minimum VVIX history days before VVIX included in feature vector
+VVIX_CONFIDENCE_MIN_DAYS = 504  # ~2 years of trading days
+
 # ── Phase 4: FOMC Schedule 2026 ───────────────────────────────────────────────
 FOMC_SCHEDULE_2026 = [
     "2026-01-29", "2026-03-18", "2026-05-06",

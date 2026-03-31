@@ -1,5 +1,5 @@
 # Trading Infrastructure — Claude Code Reference
-**Last updated:** 2026-03-29
+**Last updated:** 2026-03-31 after Task 007 — Sarah Stages 4–5 complete
 
 ---
 
@@ -69,6 +69,17 @@ instance at `data/processed/macro.db`.
 }
 ```
 
+### `data/outputs/pretrade_memo.json` — written by Sarah Stage 4
+```json
+{ "ticker": "SPY", "date": "2026-03-31", "written_at": "2026-03-31T...",
+  "thesis_parameters": { "expected_move": 0.10, "thesis_days": 45,
+                          "catalyst_type": "macro_catalyst", "max_loss_budget": 600.0 },
+  "market_state": { "vol_level": {}, "term_structure": {},
+                     "skew": {}, "flow": null, "distribution": {} },
+  "structure_comparison": { "all_structures": {}, "affordable": {} },
+  "data_warning": "⚠ Data: yfinance 15–20 min delayed. Not for live pre-trade decisions." }
+```
+
 ---
 
 ## Component Status
@@ -76,7 +87,11 @@ instance at `data/processed/macro.db`.
 | Component | Status | Entry point |
 |-----------|--------|-------------|
 | Marcus | ✅ Live | `systems/signals/regime_classifier.py` |
-| Sarah | 🔨 Next | `systems/sarah/` (not yet created) |
+| Sarah Stage 1 | ✅ Complete | `systems/sarah/daily_vol_run.py` — daily vol pipeline |
+| Sarah Stage 2 | ✅ Complete | `systems/sarah/greeks_tool.py` — analytic BS, 7 greeks, mispricing flag, portfolio aggregator |
+| Sarah Stage 3 | ✅ Complete | `systems/sarah/scenario_engine.py` — scenario P&L engine — heatmap, stress scenarios (skew-amplified), structure comparison with break-even, kill scenario |
+| Sarah Stage 4 | ✅ Complete | `systems/sarah/pretrade_dashboard.py` — pre-trade dashboard: 5 panels, BL density, structure comparison, memo JSON |
+| Sarah Stage 5 (Complete) | ✅ Complete | `systems/sarah/regime_library.py` — regime library: VVIX feed, analog search, event library (6 events), pre-transition monitor |
 | Jordan | ⬜ Not built | `systems/risk/` |
 | Priya | ⬜ Not built | `research/` |
 | Kai | ⬜ Not built | `systems/execution/` |
@@ -94,6 +109,9 @@ from config import (
 from systems.utils.db import get_connection, get_latest, get_series_history
 ```
 
+### Event Library
+`data/events/regime_events.yaml` — manually curated. Add new events after significant market moves.
+
 ---
 
 ## DB Tables in `macro.db` (do not recreate)
@@ -106,6 +124,14 @@ from systems.utils.db import get_connection, get_latest, get_series_history
 | `fetch_log` | macro_feed.py | Data ingestion audit trail |
 | `macro_calendar` | macro_feed.py | FOMC + release dates |
 | `regime_return_stats` | compute_regime_return_stats.py | Regime-conditional returns |
+
+## DB Tables in `trading.db` (do not recreate)
+
+| Table | Written by | Purpose |
+|-------|-----------|---------|
+| `vol_signals` | daily_vol_run.py | Daily vol surface signals per ticker |
+| `vol_surface` | daily_vol_run.py | Raw vol surface term structure |
+| `vvix_daily` | cboe_feed.py | Daily VVIX, VIX, ratio values |
 
 ---
 

@@ -1,0 +1,281 @@
+# Historical Regime Event Library
+# Manually curated — add new events after significant market moves.
+# Schema: id, name, dates, spot_move_pct, vol_move_vpts, vol_move_note,
+#         duration_days, character, pre_event_surface, what_worked,
+#         what_failed, lessons, recovery_days
+
+events:
+
+  - id: volmageddon_2018
+    name: Volmageddon
+    dates:
+      start: "2018-02-02"
+      acute: "2018-02-05"
+      end:   "2018-02-09"
+    spot_move_pct: -10.2
+    vol_move_vpts: 20.0
+    vol_move_note: >-
+      Absolute vol points (VIX moved from ~13.5 to ~33.5). Not a percentage.
+      VIX intraday touched 50 before closing near 33. Inverse vol products
+      (XIV, SVXY) suffered near-total losses on the close.
+    duration_days: 7
+    character: >-
+      Vol compression unwind triggered by systematic short-vol product rebalancing.
+      Inverse VIX ETPs (XIV, SVXY) were forced to buy VIX futures to rebalance as VIX
+      spiked, creating a mechanical feedback loop. Surface went from extreme contango
+      to near-inverted in hours.
+    pre_event_surface:
+      atm_iv_approx: 10.0
+      iv_rank_approx: 0.02
+      term_structure: steep_contango
+      skew: compressed_put_skew
+      vix_level: 13.5
+      notes: >-
+        VIX at multi-decade lows. Market-wide complacency — inverse vol products
+        at peak AUM. Front-end vol nearly zero; no premium priced for gap risk.
+    what_worked:
+      - Long gamma (puts and calls) — both profited from realized vol
+      - Long VIX calls entered during the low-vol period
+      - Tail hedges: far OTM puts held as insurance
+      - Cash and short equity positions going into the event
+    what_failed:
+      - Short vol products (XIV/SVXY) — near-zero overnight
+      - Credit spreads and iron condors on short expiration
+      - Selling puts to generate income — losses exceeded years of premium
+      - Strategies assuming vol reversion over days vs. hours
+    lessons:
+      - Extreme vol compression concentrates fragility; the unwind is non-linear
+      - Inverse vol product rebalancing creates mechanical feedback at key VIX levels
+      - Gamma is cheap when vol is low — insurance has highest value when least priced
+      - Risk management must account for gap-to-open scenarios, not just gradual moves
+    recovery_days: 42
+
+  - id: march_2020_covid
+    name: COVID Crash — March 2020
+    dates:
+      start: "2020-02-20"
+      acute: "2020-03-16"
+      end:   "2020-03-23"
+    spot_move_pct: -34.0
+    vol_move_vpts: 68.0
+    vol_move_note: >-
+      Absolute vol points (VIX moved from ~14 to ~82). Not a percentage.
+      VIX closed at 82.69 on March 16 — highest daily close in recorded history.
+      Vol-of-vol (VVIX) also hit record levels, making options extremely expensive.
+    duration_days: 32
+    character: >-
+      Pandemic-driven liquidity crisis with circuit-breaker halts. Vol regime
+      shifted from RISK_ON_LOW_VOL to CRISIS within days. Correlations went to 1.
+      Options market-makers withdrew, creating extreme bid-ask spreads. VVIX hit
+      record levels reflecting uncertainty about uncertainty itself.
+    pre_event_surface:
+      atm_iv_approx: 14.0
+      iv_rank_approx: 0.05
+      term_structure: mild_contango
+      skew: moderate_put_skew
+      vix_level: 14.0
+      notes: >-
+        VIX near post-2017 lows. Market complacent entering 2020. Put skew
+        present but not elevated — no premium priced for tail risk at this
+        magnitude. Pre-transition VVIX was muted despite early COVID news.
+    what_worked:
+      - Long puts entered before Feb 24 decline
+      - Long VIX calls and VXX
+      - Cash — preservation of capital was highest alpha
+      - Protective collars on equity portfolios
+      - Short positions hedged with defined-risk structures
+    what_failed:
+      - Calendar spreads — front month vol exploded faster than back month
+      - Short strangles and iron condors
+      - Volatility mean-reversion strategies
+      - Relying on liquidity in fast-moving option chains
+    lessons:
+      - In liquidity crises, bid-ask spreads widen to points; pre-positioned hedges matter
+      - Far OTM puts gap through strikes and provide non-linear payoff
+      - VVIX elevated readings (even minor ones) preceding crisis deserve attention
+      - Correlation convergence removes diversification benefit precisely when needed
+      - Fed put has historically truncated downside — but with 2–4 week lag
+    recovery_days: 148
+
+  - id: q4_2018_selloff
+    name: Q4 2018 Selloff
+    dates:
+      start: "2018-10-03"
+      acute: "2018-12-24"
+      end:   "2019-01-04"
+    spot_move_pct: -20.0
+    vol_move_vpts: 24.0
+    vol_move_note: >-
+      Absolute vol points (VIX moved from ~12 to ~36). Not a percentage.
+      Vol rise was gradual over ~3 months, not a single spike event.
+      Peak VIX on Christmas Eve: 36.07.
+    duration_days: 83
+    character: >-
+      Rate-driven bear market triggered by Fed tightening rhetoric ("long way from
+      neutral") and global growth deceleration. Sustained multi-month drawdown with
+      three distinct legs lower. Resolved by Fed pivot (Powell Jan 4, 2019).
+      Vol stayed persistently elevated vs. prior period — not a spike-and-revert.
+    pre_event_surface:
+      atm_iv_approx: 11.0
+      iv_rank_approx: 0.08
+      term_structure: steep_contango
+      skew: compressed_put_skew
+      vix_level: 12.0
+      notes: >-
+        VIX at multi-year lows entering October. Market priced near-zero Fed policy
+        risk. Earnings season provided artificial support through buybacks. No tail
+        premium in front-end — complacency prevalent.
+    what_worked:
+      - Put spreads (cost-basis management was critical given multi-month duration)
+      - Lower delta puts (25Δ and below) — premium decay minimal; payoff large
+      - Ratio spreads funded with short higher strikes
+      - Rolling put positions as support levels broke
+    what_failed:
+      - Naked short puts — losses extended over multiple legs lower
+      - Short-term defined-risk structures expired worthless before move
+      - Iron condors with insufficiently wide put wings
+      - Calendar spreads — front vol exceeded back vol during stress legs
+    lessons:
+      - Rate shock vol is diffuse (not a single spike) — strategies need multi-month duration
+      - Rolling is essential; single-expiration structures miss most of the move
+      - Selling premium in low-vol environment funds tail hedges; reverse in selloffs
+      - Fed policy pivots can be sudden — optionality to capture reversal has value
+    recovery_days: 95
+
+  - id: rate_shock_2022
+    name: Rate Shock — 2022 Bear Market
+    dates:
+      start: "2022-01-05"
+      acute: "2022-06-16"
+      end:   "2022-10-12"
+    spot_move_pct: -28.0
+    vol_move_vpts: 19.0
+    vol_move_note: >-
+      Absolute vol points (VIX moved from ~17 to ~36). Not a percentage.
+      Unlike prior events, vol was persistently elevated over 9 months rather
+      than a single spike. VIX traded 25–36 range for much of 2022. Peak close: 36.45.
+    duration_days: 281
+    character: >-
+      Fastest Fed tightening cycle since the 1980s. Repriced virtually all asset
+      classes simultaneously (stocks, bonds, gold all fell). Vol was persistently
+      elevated but did not spike to crisis levels — no single acute shock. Growth
+      stocks (QQQ) fell >35%; small caps (IWM) >30%. Inflation fear dominated.
+    pre_event_surface:
+      atm_iv_approx: 17.0
+      iv_rank_approx: 0.18
+      term_structure: mild_contango
+      skew: moderate_put_skew
+      vix_level: 17.0
+      notes: >-
+        VIX slightly above long-term median but not elevated. FOMC minutes
+        (Jan 5) revealed hawkish surprise. Market had priced ~2 hikes for 2022;
+        eventual outcome was 425bps of hikes. Rate vol (MOVE index) spiked first,
+        preceding equity vol rise by weeks.
+    what_worked:
+      - Longer-dated put spreads (60–90 DTE) that could be rolled
+      - Short duration equity pairs (long value/short growth)
+      - Inflation-linked hedges (TIPS, commodity exposure)
+      - Systematic delta-hedged puts with frequent rebalancing
+    what_failed:
+      - Short-dated options strategies (theta decay competed with sustained losses)
+      - Premium-selling strategies — realized vol exceeded implied throughout
+      - Buy-the-dip option overlays — multiple bear rallies reversed
+      - Strategies calibrated to VIX-spike events (not slow-grind bear markets)
+    lessons:
+      - Rate shock bear markets require multi-month hedging duration
+      - Realized vol can exceed implied for extended periods — net buyers of vol can profit
+      - MOVE index leads VIX in rate-driven regimes — monitor rate vol for early warning
+      - Correlation between stocks and bonds breaks down in inflation regimes
+    recovery_days: 365
+
+  - id: china_shock_2015
+    name: China Shock — August 2015
+    dates:
+      start: "2015-08-18"
+      acute: "2015-08-24"
+      end:   "2015-08-26"
+    spot_move_pct: -11.0
+    vol_move_vpts: 28.0
+    vol_move_note: >-
+      Absolute vol points (VIX moved from ~12 to ~40). Not a percentage.
+      VIX touched an intraday high near 53 on August 24 before closing at 40.7.
+      This was the largest single-day VIX open-to-intraday move on record at the time.
+    duration_days: 9
+    character: >-
+      Gap-down open driven by PBOC yuan devaluation surprise. SPY opened ~6.7% lower
+      on August 24, bypassing many stop-loss and options strike levels. Liquidity was
+      severely impaired at the open — bid-ask spreads in SPY options widened to 5–10
+      points. Front-month puts gapped through strikes.
+    pre_event_surface:
+      atm_iv_approx: 12.0
+      iv_rank_approx: 0.05
+      term_structure: steep_contango
+      skew: light_put_skew
+      vix_level: 12.0
+      notes: >-
+        VIX near 12 with no near-term event premium. China macro concerns were
+        developing but not priced. Contango steep — premium sellers were well-compensated
+        in the weeks prior. Gap risk entirely unpriced in front-end expiration.
+    what_worked:
+      - Long puts and put spreads entered before the gap
+      - Protective collars on equity portfolios
+      - Far OTM puts (gapped through strikes, provided maximum leverage)
+      - Long VVIX / VIX calls at low cost before the event
+    what_failed:
+      - Undefined-risk short puts — gap open bypassed intended exit levels
+      - Tight put spreads — short strikes were assigned before long strikes provided protection
+      - Market-on-open orders — filled at worse prices than expected
+      - Stop-loss strategies — price action skipped stop levels
+    lessons:
+      - Gap risk is highest when vol is compressed and term structure is steep contango
+      - Defined-risk structures must account for price gaps that skip strikes
+      - Liquidity in options evaporates at exactly the moment it is needed most
+      - International macro events can gap domestic indices overnight — monitor global vol
+    recovery_days: 63
+
+  - id: svb_march_2023
+    name: SVB Bank Failure — March 2023
+    dates:
+      start: "2023-03-08"
+      acute: "2023-03-13"
+      end:   "2023-03-17"
+    spot_move_pct: -5.0
+    vol_move_vpts: 7.0
+    vol_move_note: >-
+      Absolute vol points (VIX moved from ~19 to ~26). Not a percentage.
+      The broad market vol spike was contained relative to sector vol — XLF (financials)
+      and regional bank ETFs saw implied vol rise 15–25 vpts. SPY vol stayed relatively
+      anchored vs. prior crisis events due to Fed backstop credibility.
+    duration_days: 10
+    character: >-
+      Bank run triggered by SVB's disclosed securities losses (March 8). FDIC seized
+      SVB on March 10. Contagion fear spread to Signature Bank and Credit Suisse.
+      Fed announced BTFP (Bank Term Funding Program) on March 12, backstopping
+      uninsured deposits. Broad market vol stayed contained — sector vol (banks) was
+      the dominant event.
+    pre_event_surface:
+      atm_iv_approx: 19.0
+      iv_rank_approx: 0.32
+      term_structure: mild_backwardation
+      skew: moderate_put_skew
+      vix_level: 19.0
+      notes: >-
+        VIX already elevated from ongoing Fed tightening cycle. Term structure
+        slightly inverted due to near-term rate uncertainty. Credit spreads had
+        been widening for weeks — early warning signal present. VVIX was elevated
+        (pre-transition pattern active) in the days before the acute event.
+    what_worked:
+      - Long XLF puts and KRE (regional bank ETF) puts
+      - Long VIX calls as convex hedge against contagion
+      - Credit default swaps on financials (institutional players)
+      - Cash and reduced gross exposure ahead of FOMC uncertainty
+    what_failed:
+      - Broad SPY puts — market contained the damage to financials
+      - Short-dated ATM straddles — vol spike was sector-specific, not broad
+      - Strategies expecting multi-week sustained vol elevated period
+    lessons:
+      - Single-sector events can remain contained — sector vs. index vol divergence is tradeable
+      - Pre-transition VVIX signal was active days before the acute event
+      - Fed backstop mechanisms can truncate vol spikes rapidly — speed of response matters
+      - Credit spread widening preceded equity vol — multi-asset monitoring adds lead time
+    recovery_days: 21

@@ -25,6 +25,7 @@ from systems.data_feeds.macro_feed import (
 )
 from systems.signals.regime_classifier import RegimeClassifier
 from systems.utils.db import get_connection
+from systems.sarah.daily_vol_run import run_daily_vol
 
 
 def run_daily_pipeline():
@@ -107,6 +108,13 @@ if __name__ == "__main__":
     schedule.every().day.at("18:05").do(
         lambda: fetch_equity_data(get_connection())
     )
+
+    # Sarah — vol surface daily run (08:00, after Marcus writes regime_state.json)
+    schedule.every().monday.at("08:00").do(run_daily_vol)
+    schedule.every().tuesday.at("08:00").do(run_daily_vol)
+    schedule.every().wednesday.at("08:00").do(run_daily_vol)
+    schedule.every().thursday.at("08:00").do(run_daily_vol)
+    schedule.every().friday.at("08:00").do(run_daily_vol)
 
     # Phase 4: nightly snapshot, weekdays only (single lambda)
     schedule.every().day.at("18:15").do(
