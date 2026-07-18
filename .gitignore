@@ -38,3 +38,22 @@ env/
 
 # Runtime output contracts — not committed
 data/outputs/*.json
+
+# Node / frontend build
+node_modules/
+frontend/dist/
+*.tsbuildinfo
+
+# Processed databases — runtime data, re-derivable from pipeline
+data/processed/*.db
+data/processed/*.db-wal
+data/processed/*.db-shm
+
+# Generated experiment tracking, snapshots, logs
+data/mlruns/
+data/snapshots/
+logs/
+*.log
+
+# Deprecated DB dumps
+*.db.deprecated
