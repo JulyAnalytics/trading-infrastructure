@@ -12,9 +12,22 @@ plotly
 psycopg2-binary
 python-dotenv
 requests
+py_vollib
+reportlab
 rich
 schedule
 scikit-learn
 scipy
 statsmodels
 yfinance
+# ── Phase 3: Backtest Engine (Priya) ──
+mlflow==2.22.0
+# ── v1.0: Workstation service layer ──
+fastapi
+uvicorn[standard]
+# vectorbt==0.26.2  # pinned but incompatible with current plotly; install separately
+#   Error: vectorbt 0.26.2 uses heatmapgl trace type removed in plotly 5.x+.
+#   Resolution needed before Stage 3 (VectorizedBacktester). Options:
+#     (a) pin plotly to 5.17 or earlier alongside vectorbt
+#     (b) use vectorbt-pro or a maintained fork
+#     (c) implement VectorizedBacktester without vectorbt using pandas/numpy directly

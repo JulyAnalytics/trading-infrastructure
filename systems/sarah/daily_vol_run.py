@@ -27,6 +27,7 @@ from config import (
     OUTPUTS_DIR, VOL_DB_PATH, VOL_TICKERS,
     FRED_RISK_FREE_SERIES, VOL_IVR_MIN_HISTORY_DAYS,
 )
+from systems.params import get_params
 from systems.utils.db import get_connection
 from systems.utils.pricing import forward_price
 from systems.data_feeds.options_feed import fetch_options_chain
@@ -38,9 +39,11 @@ from research.signals.vol_signals import (
 from systems.sarah.vol_db import initialize_vol_schema, upsert_vol_signals
 
 
-# 80h covers overnight weekday cycle (~14h) and full weekend (Friday→Monday ~62h).
-# Friday's regime is the correct most-recent signal for Monday; this is not staleness.
-# Future: add morning refresh_output_contract() to reduce this threshold.
+# Seed default for the max acceptable regime_state.json age. The LIVE limit is
+# the GUI-editable registry value (SarahParams.regime_staleness_hours); this
+# constant only documents the default. 80h covers the overnight weekday cycle
+# (~14h) and the full weekend (Friday→Monday ~62h): Friday's regime is the
+# correct most-recent signal for Monday, which is not staleness.
 MAX_REGIME_STATE_AGE_HOURS = 80
 
 
@@ -55,9 +58,10 @@ def _load_regime_state() -> dict:
     data = json.loads(p.read_text())
     written = datetime.datetime.fromisoformat(data['written_at'])
     age_h = (datetime.datetime.now() - written).total_seconds() / 3600
-    assert age_h < MAX_REGIME_STATE_AGE_HOURS, (
+    limit_h = get_params("sarah").regime_staleness_hours
+    assert age_h < limit_h, (
         f"STALE: regime_state.json is {age_h:.1f}h old "
-        f"(limit: {MAX_REGIME_STATE_AGE_HOURS}h). Run Marcus pipeline."
+        f"(limit: {limit_h}h). Run Marcus pipeline."
     )
     return data
 
@@ -259,14 +263,11 @@ def run_daily_vol() -> dict:
         len(all_ticker_signals), len(failures)
     )
 
-    # ── Stage 5: VVIX fetch and pre-transition check ──────────────────────
-    try:
-        from systems.data_feeds.cboe_feed import fetch_vvix_daily
-        vvix_val = fetch_vvix_daily()
-        if vvix_val is not None:
-            logger.info("VVIX fetched in daily pipeline: {}", vvix_val)
-    except Exception as e:
-        logger.warning("VVIX fetch failed in daily pipeline: {}", e)
+    # VVIX is fetched once above (line ~137) via the module-level import.
+    # A prior "Stage 5" block re-imported fetch_vvix_daily locally here, which
+    # made the name function-local for the whole body and raised
+    # UnboundLocalError at the earlier call. Removed — do not re-add a local
+    # import of fetch_vvix_daily inside this function.
 
     return output
 

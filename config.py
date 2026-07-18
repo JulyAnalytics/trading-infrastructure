@@ -1,7 +1,20 @@
 """
-Phase 1 Configuration
-All constants, series IDs, and thresholds in one place.
-Update thresholds here — nowhere else.
+Root configuration.
+
+v1.0 split:
+  - Infrastructure literals (paths, API keys, series definitions, ports,
+    chart styling) live HERE and only here.
+  - Every TUNABLE (thresholds, weights, windows, gates, scenario libraries,
+    schedules) lives in the versioned parameter registry — systems/params.
+    Edit them through the GUI / systems.params.set_params(), never in code.
+
+Legacy imports keep working: `from config import REGIME_THRESHOLDS` resolves
+through the registry (PEP 562 __getattr__ below) against the ACTIVE version.
+Note that `from config import X` binds at the importing module's import time —
+long-running processes pick up parameter edits on their next fresh process,
+while code that calls systems.params.get_params() directly sees edits live.
+The registry seeds itself from code defaults (systems/params/models.py) on
+first use, so a fresh checkout behaves exactly like v0.5.
 """
 
 import os
@@ -12,12 +25,15 @@ load_dotenv()
 # ── API Keys ──────────────────────────────────────────────────────────────────
 FRED_API_KEY = os.getenv("FRED_API_KEY", "")   # free at fred.stlouisfed.org/docs/api
 
-# ── Database ──────────────────────────────────────────────────────────────────
+# ── Databases & Paths ─────────────────────────────────────────────────────────
 DUCKDB_PATH = "data/processed/macro.db"
+VOL_DB_PATH = "data/processed/trading.db"      # Sarah + research + parameter registry
 OUTPUTS_DIR = "data/outputs"
 
 # ── FRED Series ───────────────────────────────────────────────────────────────
 # Format: { internal_name: (fred_series_id, human_label, update_frequency) }
+# Series *definitions* are data plumbing and stay here; per-series enable/disable
+# lives in the registry (DataParams.macro_series_disabled).
 MACRO_SERIES = {
     # Rates & Yield Curve
     "fed_funds":        ("FEDFUNDS",    "Fed Funds Rate",           "monthly"),
@@ -64,46 +80,13 @@ MACRO_SERIES = {
     # Global / FX Proxy
     "trade_weighted_usd": ("DTWEXBGS",  "Trade-Weighted USD",       "daily"),
     "oil_wti":            ("DCOILWTICO","WTI Crude Oil Price",       "daily"),
-    "gold":               ("GOLDAMGBD228NLBM", "Gold Price (London)", "daily"),
+    # NOTE: the LBMA London gold series (GOLDAMGBD228NLBM) was discontinued by
+    # FRED and returned "series does not exist" on every fetch. Removed — gold
+    # is not consumed by the regime classifier. If gold data is wanted, source
+    # it via yfinance (GLD / GC=F) the way SPY equity is (macro_feed.fetch_equity_data).
 }
 
-# CFTC COT — fetched separately via Quandl/direct download
-CFTC_INSTRUMENTS = ["SP500", "NASDAQ", "EURUSD", "GOLD", "WTI", "BONDS_10Y"]
-
-# ── Regime Thresholds ─────────────────────────────────────────────────────────
-# All in basis points or index points unless noted
-REGIME_THRESHOLDS = {
-    "vix": {
-        "low":    15.0,    # below = low vol / complacency
-        "medium": 20.0,    # 15-20 = neutral
-        "high":   25.0,    # above = elevated stress
-        "crisis": 35.0,    # above = crisis / vol regime
-    },
-    "hy_spread": {
-        "tight":  300,     # bps — historically tight
-        "normal": 450,
-        "wide":   600,     # stress
-        "crisis": 900,     # 2008/2020 territory
-    },
-    "yield_curve_10_2": {
-        "inverted":  -10,  # bps — confirmed inversion
-        "flat":       50,  # bps — flattening / warning
-        "normal":    100,
-        "steep":     200,
-    },
-    "unemployment_delta": {
-        "improving": -0.3,  # MoM change in pp
-        "stable":     0.2,
-        "deteriorating": 0.5,
-    },
-    "breakeven_10y": {
-        "anchored":   2.0,  # %
-        "elevated":   2.5,
-        "unanchored": 3.0,
-    },
-}
-
-# ── Regime Definitions ────────────────────────────────────────────────────────
+# ── Regime Presentation (colors are styling, not tunables) ───────────────────
 REGIME_COLORS = {
     "RISK_ON_LOW_VOL":     "#00C851",   # green
     "RISK_ON_ELEVATED_VOL": "#ffbb33",  # amber
@@ -113,10 +96,12 @@ REGIME_COLORS = {
     "CRISIS":              "#CC0000",   # deep red
 }
 
-# ── Dashboard ─────────────────────────────────────────────────────────────────
-DASHBOARD_HOST = "127.0.0.1"
+# ── Servers ───────────────────────────────────────────────────────────────────
+DASHBOARD_HOST = "127.0.0.1"     # legacy Dash app (retired after Phase 2)
 DASHBOARD_PORT = 8050
-DASHBOARD_REFRESH_SECONDS = 3600   # 1 hour for EOD data
+API_HOST = "127.0.0.1"           # v1.0 FastAPI service layer
+API_PORT = 8100
+RCS_BASE_URL = "http://localhost:8099"   # Research Capture System (read-only bridge)
 
 CHART_BASE_LAYOUT = dict(
     template="plotly_dark",
@@ -130,71 +115,37 @@ CHART_BASE_LAYOUT = dict(
 LOG_PATH = "logs/phase1.log"
 LOG_LEVEL = "INFO"
 
-# ── Phase 2: Staleness Thresholds ─────────────────────────────────────────────
-# Threshold is set on the PRIMARY series for each component.
-# Note: Labor threshold uses claims cadence (weekly), not unemployment (monthly).
-STALENESS_THRESHOLDS_DAYS = {
-    "vol":         3,    # VIX: daily (3d accounts for weekends)
-    "credit":      3,    # HY spread: daily
-    "curve":       3,    # yield curve: daily
-    "inflation":   3,    # breakeven: daily
-    "labor":       10,   # claims: weekly (primary signal; faster than unemployment)
-    "positioning": 10,   # COT: weekly + ~3-day publication lag
-}
+# ── MLflow / Research infrastructure ─────────────────────────────────────────
+from pathlib import Path as _Path
 
-# Separate threshold for the unemployment LEVEL within Labor
-UNEMPLOYMENT_STALE_DAYS = 45   # monthly with FRED lag
+# MLflow — absolute path to prevent fragmentation across working directories
+MLFLOW_TRACKING_URI = str(_Path(OUTPUTS_DIR).resolve().parent / "mlruns")
+MLFLOW_EXPERIMENT_NAME = "priya_research"
 
-# ── Phase 2: Divergence Detection Thresholds ──────────────────────────────────
-# Set a priori — calibrate after backfill using scripts/calibrate_divergence_threshold.py
-# Yield Curve collinearity note: 10Y-2Y and 10Y-3M are highly collinear.
-# Yield Curve represents one independent signal with a timing offset, not two.
-DIVERGENCE_THRESHOLD_VC = 0.6    # Vol/Credit spread
-DIVERGENCE_THRESHOLD_VL = 0.7    # Vol/Labor spread
-DIVERGENCE_MIN_CREDIT_STRESS = 0.1  # Credit must be <= this for LABOR_LAG_WARNING
+# Hypothesis registry — stored in DuckDB for consistency with all other
+# persistent state. Table created in trading.db alongside Sarah's tables.
+HYPOTHESIS_REGISTRY_DB = VOL_DB_PATH  # trading.db — shared research DB
 
-# ── Phase 4: Component Weights (mirrors RegimeClassifier.WEIGHTS) ─────────────
-# Kept here so dashboard and snapshot generator can read weights without
-# importing the classifier (avoids circular imports and heavy deps at startup).
-COMPONENT_WEIGHTS = {
-    "vol":         0.25,
-    "credit":      0.25,
-    "curve":       0.20,
-    "inflation":   0.10,
-    "labor":       0.15,
-    "positioning": 0.05,
-}
+# RCS SQLite (read-only from this repo — see systems/risk RCS bridge)
+RCS_DB_PATH = os.path.expanduser(
+    "~/Nextcloud/Trading/research-capture-system/research/data/research.db"
+)
 
-# ── Sarah: Vol Surface Layer ──────────────────────────────────────────────────
-# Separate DuckDB for vol surface data (keeps macro.db unmodified)
-VOL_DB_PATH = "data/processed/trading.db"
 
-# Tickers for daily vol surface ingestion
-VOL_TICKERS = ["SPY", "QQQ", "IWM", "XLE", "GLD"]
+# ── Tunables — resolved from the parameter registry ──────────────────────────
+# REGIME_THRESHOLDS, COMPONENT_WEIGHTS, STALENESS_THRESHOLDS_DAYS,
+# DIVERGENCE_*, VOL_TICKERS, CATALYST_TYPES, BACKTEST_*, CPCV_*, SPREAD_FLOOR_*,
+# TRIPLE_BARRIER_*, VOL_CONE_*, FRACDIFF_*, SHARPE_*, MC_DEFAULT_N_PATHS,
+# FOMC_SCHEDULE_2026, CFTC_INSTRUMENTS, DASHBOARD_REFRESH_SECONDS, …
+# Full name → registry field map: systems/params/compat.py
 
-# FRED series for DTE-matched risk-free rate (3-month T-bill as default proxy)
-FRED_RISK_FREE_SERIES = "DGS3MO"
+def __getattr__(name):
+    from systems.params import REGISTRY_BACKED_NAMES, config_value
+    if name in REGISTRY_BACKED_NAMES:
+        return config_value(name)
+    raise AttributeError(f"module 'config' has no attribute {name!r}")
 
-# Minimum history days before IVR/IVP is considered reliable
-VOL_IVR_MIN_HISTORY_DAYS = 60
 
-# ── Sarah: Stage 4 Pre-Trade Dashboard ───────────────────────────────────────
-# Catalyst type enum for term structure analysis (replaces direction label)
-CATALYST_TYPES = ("macro_slow", "macro_catalyst", "event_specific", "technical")
-
-# Flow observation notes field max length
-MAX_FLOW_NOTES_LENGTH = 200
-
-# ── Sarah: Stage 5 Historical Regime Library ─────────────────────────────────
-# Minimum history days before analog search results are trusted
-ANALOG_MIN_HISTORY_DAYS = 120
-
-# Minimum VVIX history days before VVIX included in feature vector
-VVIX_CONFIDENCE_MIN_DAYS = 504  # ~2 years of trading days
-
-# ── Phase 4: FOMC Schedule 2026 ───────────────────────────────────────────────
-FOMC_SCHEDULE_2026 = [
-    "2026-01-29", "2026-03-18", "2026-05-06",
-    "2026-06-17", "2026-07-29", "2026-09-16",
-    "2026-10-28", "2026-12-16",
-]
+def __dir__():
+    from systems.params import REGISTRY_BACKED_NAMES
+    return sorted(list(globals().keys()) + list(REGISTRY_BACKED_NAMES))

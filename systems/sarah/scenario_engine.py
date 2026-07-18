@@ -20,73 +20,47 @@ import pandas as pd
 from typing import Optional
 from loguru import logger
 
+from systems.params import get_params, SarahParams
+from systems.params.models import _default_stress_scenarios
 from systems.utils.pricing import bs_price, bs_greeks_full
 
 
-# ── Grid Parameters ────────────────────────────────────────────────────────────
-
-GRID_SPOT_RANGE_PCT   = 0.30
-GRID_SPOT_STEP_PCT    = 0.025
-GRID_IV_RANGE_VPTS    = 25     # ±25 vol points minimum per v3.0 spec
-GRID_IV_STEP_VPTS     = 1
-GRID_TIME_CHECKPOINTS = [0.0, 0.25, 0.50, 0.75]
-
-GRID_SPOT_RANGE_HIGHVOL = 0.40
-GRID_IV_RANGE_HIGHVOL   = 35
-
-# ── Named Stress Scenarios ─────────────────────────────────────────────────────
+# ── Legacy aliases (code defaults) ─────────────────────────────────────────────
+# The LIVE values come from the parameter registry (component "sarah") — edit
+# them there, not here. These module constants remain only so existing imports
+# keep resolving; they reflect the shipped defaults, not any GUI edits.
 # ALL vol_shock_vpts are ABSOLUTE vol points. Never percentages.
-# Volmageddon is +20 vpts absolute — not "+100% VIX" (that was the pct change).
 
-STRESS_SCENARIOS = {
-    '2018_q4': {
-        'label':          '2018 Q4 Selloff',
-        'spot_shock':     -0.20,
-        'vol_shock_vpts': 24.0,   # VIX 12→36
-        'duration':       '3 months',
-        'character':      'Grinding decline, sustained. Not a one-day shock.',
-    },
-    'march_2020': {
-        'label':          'March 2020',
-        'spot_shock':     -0.34,
-        'vol_shock_vpts': 62.0,   # VIX 15→77
-        'duration':       '3 weeks',
-        'character':      'Acute shock, historic speed. Liquidity collapse.',
-    },
-    'aug_2015': {
-        'label':          'August 2015 China',
-        'spot_shock':     -0.11,
-        'vol_shock_vpts': 22.0,   # VIX 13→35
-        'duration':       '2 weeks',
-        'character':      'Spike and recovery. Vol mean-reverted quickly.',
-    },
-    'volmageddon': {
-        'label':          'Volmageddon Feb 2018',
-        'spot_shock':     -0.04,
-        'vol_shock_vpts': 20.0,   # VIX 17→37 in one session (+20 vpts absolute)
-                                   # NOT "+100% VIX" — that was the percentage change
-        'duration':       '1 session',
-        'character':      'Vol-specific. Spot barely moved; vol doubled.',
-    },
-    '2022_rates': {
-        'label':          '2022 Rate Shock',
-        'spot_shock':     -0.25,
-        'vol_shock_vpts': 15.0,   # VIX 17→32 sustained
-        'duration':       '10 months',
-        'character':      'Slow grind, no acute spike. Theta bleed punished longs throughout.',
-    },
-    '2011_euro': {
-        'label':          '2011 Euro Crisis',
-        'spot_shock':     -0.19,
-        'vol_shock_vpts': 22.0,   # VIX 15→37
-        'duration':       '5 months',
-        'character':      'Repeated stress events. Multiple spikes and partial recoveries.',
-    },
-}
+GRID_SPOT_RANGE_PCT   = SarahParams().grid_spot_range_pct
+GRID_SPOT_STEP_PCT    = SarahParams().grid_spot_step_pct
+GRID_IV_RANGE_VPTS    = SarahParams().grid_iv_range_vpts
+GRID_IV_STEP_VPTS     = SarahParams().grid_iv_step_vpts
+GRID_TIME_CHECKPOINTS = SarahParams().grid_time_checkpoints
+GRID_SPOT_RANGE_HIGHVOL = SarahParams().grid_spot_range_highvol
+GRID_IV_RANGE_HIGHVOL   = SarahParams().grid_iv_range_highvol
+
+STRESS_SCENARIOS = _default_stress_scenarios()
 
 
 class ScenarioEngine:
-    """P&L scenario engine. Uses bs_price from pricing.py — no local pricing logic."""
+    """
+    P&L scenario engine. Uses bs_price from pricing.py — no local pricing logic.
+
+    All tunables (grid ranges, stress scenario library, kill assumptions,
+    break-even search) come from the parameter registry. Pass an explicit
+    SarahParams to run under a candidate parameter set (GUI preview).
+    """
+
+    def __init__(self, params: "SarahParams | None" = None):
+        self._params_override = params
+
+    @property
+    def params(self) -> "SarahParams":
+        return self._params_override or get_params("sarah")
+
+    def stress_scenario_library(self) -> dict:
+        """The ACTIVE stress scenario library (user-editable in the registry)."""
+        return dict(self.params.stress_scenarios)
 
     def scenario_pnl_grid(
         self,
@@ -106,17 +80,20 @@ class ScenarioEngine:
         qty    = pos['quantity']
         sign   = 1 if pos['long_short'] == 'long' else -1
 
-        high_vol   = (spot_vix or 0) > 25
-        spot_range = GRID_SPOT_RANGE_HIGHVOL if high_vol else GRID_SPOT_RANGE_PCT
-        iv_range   = GRID_IV_RANGE_HIGHVOL   if high_vol else GRID_IV_RANGE_VPTS
+        p = self.params
+        high_vol   = (spot_vix or 0) > p.highvol_vix_threshold
+        spot_range = p.grid_spot_range_highvol if high_vol else p.grid_spot_range_pct
+        iv_range   = p.grid_iv_range_highvol   if high_vol else p.grid_iv_range_vpts
 
         entry_price = bs_price(flag, spot, strike, dte / 365.0, rate, q, iv_pct)
 
-        spot_steps = np.arange(-spot_range, spot_range + GRID_SPOT_STEP_PCT, GRID_SPOT_STEP_PCT)
-        iv_steps   = np.arange(-iv_range, iv_range + GRID_IV_STEP_VPTS, GRID_IV_STEP_VPTS)
+        spot_steps = np.arange(-spot_range, spot_range + p.grid_spot_step_pct,
+                               p.grid_spot_step_pct)
+        iv_steps   = np.arange(-iv_range, iv_range + p.grid_iv_step_vpts,
+                               p.grid_iv_step_vpts)
 
         grids = {}
-        for time_frac in GRID_TIME_CHECKPOINTS:
+        for time_frac in p.grid_time_checkpoints:
             t_rem = max(dte * (1 - time_frac), 0.5) / 365.0
             pnl_matrix = np.zeros((len(spot_steps), len(iv_steps)))
 
@@ -145,7 +122,7 @@ class ScenarioEngine:
             'grid_params': {
                 'spot_range_pct': spot_range,
                 'iv_range_vpts':  iv_range,
-                'time_checkpoints': GRID_TIME_CHECKPOINTS,
+                'time_checkpoints': list(p.grid_time_checkpoints),
             },
             'bs_limitation': (
                 "Black-Scholes flat vol assumed. Skew not modeled in grid. "
@@ -169,11 +146,12 @@ class ScenarioEngine:
         where 10Δ puts spike faster than 25Δ puts in a stress event.
         (Note: architecture spec formula is inverted — implementation is correct.)
         """
-        if scenario_key not in STRESS_SCENARIOS:
+        library = self.stress_scenario_library()
+        if scenario_key not in library:
             raise ValueError(f"Unknown scenario: {scenario_key}. "
-                             f"Valid: {list(STRESS_SCENARIOS.keys())}")
+                             f"Valid: {list(library.keys())}")
 
-        scenario = STRESS_SCENARIOS[scenario_key]
+        scenario = library[scenario_key]
         market   = position['market']
         pos      = position['position']
 
@@ -388,14 +366,18 @@ class ScenarioEngine:
         rate: float,
         div_yield: float,
         days: int,
-        search_range: float = 0.35,
-        step: float = 0.001,
+        search_range: "float | None" = None,
+        step: "float | None" = None,
     ) -> list[float]:
         """
         Find spot levels where total structure P&L = 0 at expiration.
         Grid search over ±search_range. Returns list of break-even spot pct moves.
         Sign changes indicate zero crossings.
         """
+        if search_range is None:
+            search_range = self.params.breakeven_search_range
+        if step is None:
+            step = self.params.breakeven_step
         t = days / 365.0
         prev_pnl = None
         be_levels = []
@@ -423,10 +405,14 @@ class ScenarioEngine:
     def kill_scenario(
         self,
         position: dict,
-        iv_compression_vpts: float = 8.0,
-        days_elapsed: int = 30,
+        iv_compression_vpts: "float | None" = None,
+        days_elapsed: "int | None" = None,
     ) -> dict:
         """Maximum realistic loss: spot flat + IV compressed by N vol points by day X."""
+        if iv_compression_vpts is None:
+            iv_compression_vpts = self.params.kill_iv_compression_vpts
+        if days_elapsed is None:
+            days_elapsed = self.params.kill_days_elapsed
         market = position['market']
         pos    = position['position']
         spot   = market['spot']
@@ -474,7 +460,7 @@ class ScenarioEngine:
         }
 
         results['stress_scenarios'] = {}
-        for key in STRESS_SCENARIOS:
+        for key in self.stress_scenario_library():
             try:
                 results['stress_scenarios'][key] = self.stress_scenario_pnl(position, key)
             except Exception as e:

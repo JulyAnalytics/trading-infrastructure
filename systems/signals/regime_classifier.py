@@ -28,7 +28,8 @@ import pandas as pd
 from loguru import logger
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..'))
-from config import REGIME_THRESHOLDS, DUCKDB_PATH, COMPONENT_WEIGHTS
+from config import DUCKDB_PATH
+from systems.params import get_params, MarcusParams
 from systems.utils.db import get_connection, get_latest, get_series_history
 
 
@@ -106,6 +107,15 @@ class RegimeResult:
     # Phase 2: divergence signal
     divergence:        dict  = None
 
+    # v1.0: the parameter set this result was produced under. Set by the
+    # classifier so attribution/probability math uses the SAME weights and
+    # regime mapping that scored the result (critical for GUI previews that
+    # classify under a candidate parameter set).
+    params:            "MarcusParams | None" = None
+
+    def _params(self) -> "MarcusParams":
+        return self.params if self.params is not None else get_params("marcus")
+
     def __str__(self):
         lines = [
             f"═══ REGIME STATE: {self.regime} ═══",
@@ -134,7 +144,7 @@ class RegimeResult:
     # ── Phase 2: Attribution ───────────────────────────────────────────────────
 
     def attribution(self) -> dict:
-        weights = COMPONENT_WEIGHTS
+        weights = self._params().component_weights
         components = {
             "Vol":         (self.vol_score,          weights["vol"]),
             "Credit":      (self.credit_score,        weights["credit"]),
@@ -179,14 +189,15 @@ class RegimeResult:
 
     def _nearest_threshold_gap(self) -> float:
         gaps = [abs(self.composite_score - t)
-                for t, _ in RegimeClassifier.SCORE_TO_REGIME]
+                for t, _ in self._params().score_to_regime]
         return min(gaps)
 
     def _nearest_adjacent_regime(self) -> str:
-        for i, (threshold, label) in enumerate(RegimeClassifier.SCORE_TO_REGIME):
+        mapping = self._params().score_to_regime
+        for i, (threshold, label) in enumerate(mapping):
             if self.composite_score >= threshold:
-                if i + 1 < len(RegimeClassifier.SCORE_TO_REGIME):
-                    return RegimeClassifier.SCORE_TO_REGIME[i + 1][1]
+                if i + 1 < len(mapping):
+                    return mapping[i + 1][1]
                 break
         return "CRISIS"
 
@@ -249,27 +260,22 @@ class RegimeClassifier:
     Scores each macro dimension on a -1 to +1 scale,
     combines them with weights, then maps the composite to a regime label.
 
-    Weights are intentionally transparent — change them in config.py.
+    Weights, thresholds and the score→regime mapping come from the parameter
+    registry (systems/params, component "marcus"). Pass an explicit
+    MarcusParams to classify under a candidate parameter set (GUI preview).
     """
 
-    # Single source of truth — defined in config.py
-    # Do not redefine here. Update config.py to change weights.
-    WEIGHTS = None  # set in __init__
-
-    # Composite score → regime mapping
-    SCORE_TO_REGIME = [
-        (+0.60, "RISK_ON_LOW_VOL"),
-        (+0.25, "RISK_ON_ELEVATED_VOL"),
-        (-0.10, "NEUTRAL"),
-        (-0.40, "CAUTION"),
-        (-0.65, "RISK_OFF_STRESS"),
-        (-2.00, "CRISIS"),           # floor
-    ]
-
-    def __init__(self, db_path: str = DUCKDB_PATH):
-        from config import COMPONENT_WEIGHTS
-        self.WEIGHTS = COMPONENT_WEIGHTS
-        self.conn = get_connection()
+    def __init__(self, db_path: str = DUCKDB_PATH,
+                 params: "MarcusParams | None" = None):
+        self.params = params or get_params("marcus")
+        weights = self.params.component_weights
+        total = sum(weights.values())
+        if abs(total - 1.0) > 1e-6:
+            raise ValueError(
+                f"Component weights must sum to 1.0, got {total:.6f}: {weights}"
+            )
+        self.WEIGHTS = weights
+        self.conn = get_connection(db_path)
 
     # ── Data Loading ──────────────────────────────────────────────────────────
 
@@ -439,7 +445,7 @@ class RegimeClassifier:
         if snap.vix is None:
             return 0.0, bullish, bearish
 
-        t = REGIME_THRESHOLDS["vix"]
+        t = self.params.regime_thresholds["vix"]
         if snap.vix > t["crisis"]:
             score = -1.0
             bearish.append(f"VIX in CRISIS territory ({snap.vix:.1f} > {t['crisis']})")
@@ -473,7 +479,7 @@ class RegimeClassifier:
         if snap.hy_spread is None:
             return 0.0, bullish, bearish
 
-        t = REGIME_THRESHOLDS["hy_spread"]
+        t = self.params.regime_thresholds["hy_spread"]
         if snap.hy_spread > t["crisis"]:
             score = -1.0
             bearish.append(f"HY spreads at crisis levels ({snap.hy_spread:.0f}bps)")
@@ -495,7 +501,7 @@ class RegimeClassifier:
     def _score_curve(self, snap: MacroSnapshot) -> "tuple[float, list, list]":
         """Yield curve shape — powerful but lagging."""
         bullish, bearish = [], []
-        t     = REGIME_THRESHOLDS["yield_curve_10_2"]
+        t     = self.params.regime_thresholds["yield_curve_10_2"]
         curve = snap.yield_curve_10_2
 
         if curve is None:
@@ -529,7 +535,7 @@ class RegimeClassifier:
     def _score_inflation(self, snap: MacroSnapshot) -> "tuple[float, list, list]":
         """Inflation regime — affects Fed policy space."""
         bullish, bearish = [], []
-        t  = REGIME_THRESHOLDS["breakeven_10y"]
+        t  = self.params.regime_thresholds["breakeven_10y"]
         be = snap.breakeven_10y
 
         if be is None:
@@ -593,7 +599,7 @@ class RegimeClassifier:
                 bearish.append(f"Unemployment elevated ({snap.unemployment:.1f}%)")
 
         if snap.unemp_delta_3m is not None:
-            t = REGIME_THRESHOLDS["unemployment_delta"]
+            t = self.params.regime_thresholds["unemployment_delta"]
             if snap.unemp_delta_3m > t["deteriorating"]:
                 score -= 0.4
                 bearish.append(
@@ -645,8 +651,9 @@ class RegimeClassifier:
     # ── Phase 2: Divergence Detection ─────────────────────────────────────────
 
     def _score_divergence(self, result: RegimeResult) -> "dict | None":
-        from config import (DIVERGENCE_THRESHOLD_VC, DIVERGENCE_THRESHOLD_VL,
-                            DIVERGENCE_MIN_CREDIT_STRESS)
+        DIVERGENCE_THRESHOLD_VC      = self.params.divergence_threshold_vc
+        DIVERGENCE_THRESHOLD_VL      = self.params.divergence_threshold_vl
+        DIVERGENCE_MIN_CREDIT_STRESS = self.params.divergence_min_credit_stress
 
         vol    = result.vol_score
         credit = result.credit_score
@@ -707,7 +714,7 @@ class RegimeClassifier:
         # ── Tertiary: Broad component disagreement ────────────────────────────
         all_scores = [vol, credit, curve, labor]
         spread_all = max(all_scores) - min(all_scores)
-        if spread_all >= 1.2:
+        if spread_all >= self.params.broad_divergence_spread:
             return {
                 "type":       "BROAD_COMPONENT_DIVERGENCE",
                 "severity":   "LOW",
@@ -803,7 +810,7 @@ class RegimeClassifier:
 
         # Map score to regime
         regime = "CRISIS"   # default floor
-        for threshold, label in self.SCORE_TO_REGIME:
+        for threshold, label in self.params.score_to_regime:
             if composite >= threshold:
                 regime = label
                 break
@@ -814,9 +821,9 @@ class RegimeClassifier:
         negatives  = sum(s < 0 for s in component_scores)
         agreement  = max(positives, negatives) / len(component_scores)
 
-        if agreement >= 0.8:
+        if agreement >= self.params.confidence_high_agreement:
             confidence = "HIGH"
-        elif agreement >= 0.6:
+        elif agreement >= self.params.confidence_medium_agreement:
             confidence = "MEDIUM"
         else:
             confidence = "LOW"
@@ -836,6 +843,7 @@ class RegimeClassifier:
             bearish_signals   = vol_bear + cred_bear + curv_bear + infl_bear + lab_bear + pos_bear,
             warnings          = [f"Missing data: {s}" for s in snap.missing_inputs],
             snapshot          = snap,
+            params            = self.params,
         )
 
         # Phase 2: populate per-component as-of dates

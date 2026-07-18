@@ -1,21 +1,38 @@
 # Trading Infrastructure — Claude Code Reference
-**Last updated:** 2026-03-31 after Task 007 — Sarah Stages 4–5 complete
+**Last updated:** 2026-07-06 — v1.0 workstation build (parameter registry + FastAPI/React) in progress; see `docs/architecture/v1_architecture.md`. Phase 0 gauntlet + Jordan suite verified green same day (see note below); Priya workbench (Phase 4), Sarah data completions (Phase 3), and scheduler v2 (Phase 6) remain unbuilt.
+
+> **Environment note:** use `venv/bin/python` (Python 3.11.9 via pyenv), not
+> system `python3`. The venv's interpreter symlinks and script shebangs were
+> found corrupted by Nextcloud sync (symlinks → plain-text target files;
+> shebangs hardcoded to a stale OneDrive path) and have been repaired.
+> `py_vollib` (used by `systems/utils/pricing.py`) and `reportlab` (used by
+> `systems/reports/snapshot_generator.py`) were both missing from
+> `requirements.txt` despite being real dependencies — added. `kaleido` is
+> still absent, so the snapshot PDF falls back to matplotlib text for charts
+> (job succeeds, charts degraded) — install `kaleido` for full-quality PDFs.
 
 ---
 
 ## What This Project Is
 A six-component systematic trading system. Each component produces
 structured outputs consumed by downstream components. Integration
-happens through shared files in `data/outputs/` and a single DuckDB
-instance at `data/processed/macro.db`.
+happens through shared files in `data/outputs/`, DuckDB instances at
+`data/processed/macro.db` + `trading.db`, and (v1.0) a FastAPI service
+layer at :8100 with a React workstation frontend.
 
 ---
 
 ## Absolute Rules — Read Before Every Task
 
-1. All file paths come from **root `config.py`**. Never hardcode a path.
+1. All file **paths** come from root `config.py`. All **tunables**
+   (thresholds, weights, windows, gates, scenario libraries, schedules)
+   come from the parameter registry — `systems/params` → `get_params("<component>")`.
+   Never hardcode either. Legacy `from config import CONSTANT` still resolves
+   (through the registry via `config.__getattr__`), but new code calls
+   `get_params()` directly. Edit values via the GUI/`set_params()` — never in code.
 2. All DB connections use `get_connection()` from `systems/utils/db.py`.
-   Never call `duckdb.connect()` directly.
+   Never call `duckdb.connect()` directly. API read paths use the read-only
+   helpers in `systems/api/deps.py`.
 3. Never import from `systems/config_phase0_deprecated.py`.
    It is a deprecated Phase 0 relic. Use root `config.py` only.
 4. Every downstream component (Sarah, Jordan, Kai, etc.) must read
@@ -24,6 +41,46 @@ instance at `data/processed/macro.db`.
    loudly with a clear error — never silently proceed with stale data.
 5. Output contract schemas in `data/outputs/` are locked. Never change
    a schema without updating this document and `docs/architecture/`.
+6. The Research Capture System database
+   (`~/Nextcloud/Trading/research-capture-system/research/data/research.db`)
+   is READ-ONLY from this repo (SQLite `mode=ro` in `systems/risk/rcs_bridge.py`).
+   Never open it writable; RCS owns its own writes and backups (ADR-003).
+7. Pipeline writes run one-at-a-time through job subprocesses
+   (`systems/orchestration`); GET endpoints never write. Every run stamps
+   `systems.params.all_active_hashes()` for reproducibility.
+
+---
+
+## Documentation Map
+
+**The wiki is the reference manual:** [docs/wiki/Home.md](docs/wiki/Home.md) —
+system overview, architecture, full DB/API/parameter schemas, per-component
+docs, and user workflows. Architecture snapshots: `docs/architecture/`;
+audits: `docs/audit/`; decisions: `docs/design_decisions/`.
+
+---
+
+## v1.0 Workstation Layer (build in progress)
+
+| Piece | Location | Run / entry point |
+|---|---|---|
+| Parameter registry | `systems/params/` (models, store, compat) | `python scripts/migrate_params.py --check` |
+| FastAPI service layer | `systems/api/` | `python -m uvicorn systems.api.main:app --port 8100` |
+| React frontend | `frontend/` (Vite + TS + react-plotly) | `cd frontend && npm install && npm run dev` → :5173 |
+| Job runner | `systems/orchestration/` (subprocess-per-job, single worker) | via API `POST /api/jobs` |
+| Marcus 1.0 analytics | `systems/signals/regime_analytics.py` (vector/fragility/NN/interpreter/implications) | via `/api/marcus/*` |
+| Jordan risk layer | `systems/risk/` (book, limits, stress, verdict intake, RCS bridge) | via `/api/jordan/*`; `python scripts/verify_jordan.py` |
+| Golden-master harness | `scripts/golden_master.py`, `scripts/run_phase0_gauntlet.sh` | proves registry migration is behavior-neutral |
+
+New trading.db tables (v1.0): `parameter_versions`, `jobs`, `jordan_positions`.
+Registry components: `marcus`, `sarah`, `priya`, `jordan`, `ops`, `data` — seeds
+mirror v0.5 config.py values exactly. Priya gate fields are `guarded`: editable,
+loudly logged, hash-stamped on outputs.
+
+Still pending (Phases 3/4/6): Sarah data completions (vol_surface population,
+U5.0/U5.1 backfills, memo persistence + regime-library GUI), Priya workbench,
+scheduler v2 + weekly review + alerting, Dash retirement, docs refresh of
+`current_state.md`. Kai + live trading are v1.1 (ADR-004).
 
 ---
 
@@ -80,6 +137,19 @@ instance at `data/processed/macro.db`.
   "data_warning": "⚠ Data: yfinance 15–20 min delayed. Not for live pre-trade decisions." }
 ```
 
+### `data/outputs/research_verdict.json` — written by Priya (Stage 8)
+```json
+{
+    "hypothesis_id": "...", "strategy_type": "equity|options",
+    "verdict": "GO|NO_GO", "production_haircut_sharpe": 0.65,
+    "viable_after_haircut": true, "pbo": 0.03, "dsr": 0.97,
+    "cpcv_path_count": 5, "n_trials": 8, "n_eff": 5.2,
+    "min_track_record_years": 2.1, "leland_breakeven_spread": null,
+    "regime_conditional_sharpe": {"RISK_ON_LOW_VOL": 1.2, "NEUTRAL": 0.8},
+    "written_at": "2026-04-06T14:30:00.000"
+}
+```
+
 ---
 
 ## Component Status
@@ -92,6 +162,14 @@ instance at `data/processed/macro.db`.
 | Sarah Stage 3 | ✅ Complete | `systems/sarah/scenario_engine.py` — scenario P&L engine — heatmap, stress scenarios (skew-amplified), structure comparison with break-even, kill scenario |
 | Sarah Stage 4 | ✅ Complete | `systems/sarah/pretrade_dashboard.py` — pre-trade dashboard: 5 panels, BL density, structure comparison, memo JSON |
 | Sarah Stage 5 (Complete) | ✅ Complete | `systems/sarah/regime_library.py` — regime library: VVIX feed, analog search, event library (6 events), pre-transition monitor |
+| Priya Stage 1 | ✅ Complete | `systems/backtest/data_audit.py`, `systems/backtest/hypothesis_registry.py` — data audit + hypothesis registration |
+| Priya Stage 2 | ✅ Complete | `systems/backtest/feature_engineering.py`, `systems/backtest/vol_estimators.py` — FracDiff + 5 vol estimators + vol cones |
+| Priya Stage 3 | ✅ Complete | `systems/backtest/label_construction.py` — triple-barrier labeling (Mode A/B, meta-labeling) + sample uniqueness weights; `systems/backtest/vectorized_engine.py` — VectorizedBacktester: run_single, parameter_sweep, regime_conditional_analysis, _flag_overfitting |
+| Priya Stage 4 | ✅ Complete | `systems/backtest/options_engine.py` — MC P&L distribution + 3-level costs + Leland breakeven |
+| Priya Stage 5 | ✅ Complete | `systems/backtest/purged_cv.py`, `cpcv.py`, `overfit_statistics.py` — PurgedKFold + CPCV path distribution + PBO + overfit diagnostics |
+| Priya Stage 6 | ✅ Complete | `systems/backtest/sharpe_pipeline.py`, `strategy_risk.py` — Lo SE + PSR/DSR pipeline; strategy risk P[p < p*] |
+| Priya Stage 7 | ✅ Complete | `systems/backtest/impl_shortfall.py`, `experiment_tracker.py` — implementation shortfall + production haircut utilities + MLflow tracking |
+| Priya Stage 8 | ✅ Complete | `systems/backtest/research_pipeline.py` — full pipeline orchestrator + PROCESS_GATES + NON_NEGOTIABLE_OUTPUTS + validate_outputs + write_jordan_contract; `scripts/verify_priya.py`, `scripts/verify_priya_integration.py` |
 | Jordan | ⬜ Not built | `systems/risk/` |
 | Priya | ⬜ Not built | `research/` |
 | Kai | ⬜ Not built | `systems/execution/` |
@@ -132,6 +210,7 @@ from systems.utils.db import get_connection, get_latest, get_series_history
 | `vol_signals` | daily_vol_run.py | Daily vol surface signals per ticker |
 | `vol_surface` | daily_vol_run.py | Raw vol surface term structure |
 | `vvix_daily` | cboe_feed.py | Daily VVIX, VIX, ratio values |
+| `hypothesis_registry` | hypothesis_registry.py | Pre-registered research hypotheses + trial counts per dataset |
 
 ---
 

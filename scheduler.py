@@ -9,6 +9,15 @@ Usage:
     # Or add to crontab for clean separation:
     # 0 18 * * 1-5  cd /path/to/phase1_macro && python data_feeds/macro_feed.py
     # 5 18 * * 1-5  cd /path/to/phase1_macro && python signals/regime_classifier.py
+
+# NOTE: Priya (Phase 3 backtesting) runs manually, not on a schedule.
+# It requires regime_state.json to be < BACKTEST_REGIME_STALENESS_HOURS old.
+# If running Priya on Monday, ensure Marcus ran over the weekend or
+# run Marcus manually first:
+#   python -c "from systems.signals.regime_classifier import RegimeClassifier; \
+#               c = RegimeClassifier(); c.classify(persist=True); c.write_output_contract(c.classify())"
+# Then run research:
+#   from systems.backtest.research_pipeline import ResearchPipeline
 """
 
 import sys
