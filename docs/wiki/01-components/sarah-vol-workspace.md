@@ -10,7 +10,7 @@ status: active
 
 **Status:** all five tools ✅ live and verified end-to-end (2026-07-17)
 **Code:** `systems/sarah/` + `research/signals/` + `systems/data_feeds/{options,cboe}_feed.py`
-**GUI:** *Sarah · Vol* page (four tabs) · **API:** `/api/sarah/*` · **Params:** registry component `sarah`
+**GUI:** *Sarah · Vol* page (five tabs) · **API:** `/api/sarah/*` · **Params:** registry component `sarah`
 **Deeper reference:** [audit #3](../../audit/03_sarah_vol_layer.md) (output literacy per signal)
 
 ## What Sarah does, in plain language
@@ -36,7 +36,7 @@ for it to pay.
 
 ![Sarah vol monitor](../images/sarah-vol-monitor.png)
 
-Four tabs, one per tool cluster:
+Five tabs, one per tool cluster:
 
 | Tab | Tool | Question it answers |
 |---|---|---|
@@ -44,6 +44,7 @@ Four tabs, one per tool cluster:
 | **Greeks & scenarios** | greeks tool → scenario lab | "What are this position's sensitivities, and what happens to it under moves, crushes, and crises?" |
 | **Pre-trade memo** | 5-panel memo builder | "Given my thesis, what does expressing it cost, and which structure fits my budget?" |
 | **Regime library** | analog search + VVIX monitor + event browser | "When did the vol surface look like this before, and what is vol-of-vol warning about now?" |
+| **Batch & compare** | ad-hoc multi-ticker scan + ranked comparison | "Across this earnings-week list, which names have the richest vol, and which are cheap?" |
 
 ---
 
@@ -64,6 +65,8 @@ Nothing on this tab hits the network; it reads `trading.db`.
 | `ts_shape` | 6-state enum | `*_contango` normal; `humped` = event premium in the front; `full_backwardation` = stress | backwardation with no known catalyst |
 | `skew_25d_rr` | vol points, equities −8…−1 | How much richer 25Δ puts are than calls (insurance demand) | near 0 or positive on an index (check data); < −10 without a VIX spike |
 | `macro_regime` | Marcus label | The regime this row was computed under — Sarah refuses to run on a stale regime | — |
+| `next_earnings_date` | iso date or null | Nearest upcoming earnings at run time, stamped so the compare view's earnings flag is a pure DB read (no network in the read path) | null when yfinance reports no calendar |
+| `data_source` | `yfinance` \| `unusual_whales` | Provenance tag. The daily/batch run writes `yfinance`; the future UW backfill writes `unusual_whales`. Lets the UW import honour its "today's yfinance row wins" guardrail | — |
 
 ### The four charts
 
@@ -388,6 +391,45 @@ failed, lessons. Click for the full record; the YAML is editable in the GUI
 (validated on save, previous version kept as `.bak`). Add an entry after
 every significant episode you live through — this is your institutional
 memory.
+
+---
+
+## Tool 5 — Batch & compare
+
+The daily universe is five ETFs. Screening an earnings calendar (AMD, PLTR, PFE,
+LLY, SNDK, CAT, SHOP, WDC…) needs an ad-hoc path plus cross-ticker ranking.
+
+**Batch scan.** A textarea + "Run batch" submits the ticker list as a
+`sarah_daily_vol` job with `args.tickers` (the same intake seam RCS trade intake
+uses). It runs through the *exact same* Stage 1 pipeline — chain → term
+structure → skew → signals → DB — and persists to `vol_signals`/`vol_surface`
+just like the daily run. It deliberately does **not** overwrite
+`data/outputs/vol_signals.json` (that file is the daily run's context snapshot).
+A registry-editable inter-ticker delay (`batch_inter_ticker_delay_s`, default
+1s) paces yfinance; `skip_regime_check` is on by default (screening is the use
+case the flag was built for). Status is polled from the job queue — the same
+single-writer discipline as every other job.
+
+**Compare view.** Once a batch has signals in the DB, the compare card shows a
+sortable ranking table (IV rank, VRP spread, TS shape, 25Δ RR, RV, earnings
+flag, regime) with per-dimension rankings (★ = rank 1), plus three multi-ticker
+overlays:
+
+- **Term structure overlay** — ATM IV by DTE, one line per ticker.
+- **ATM IV 30d history** — trailing IV lines per ticker.
+- **Vol opportunity map** — scatter of IV rank (x) vs VRP spread (y), bubble
+  size ∝ ATM IV. Top-right = premium-selling candidates; bottom-left =
+  long-premium / cheap-hedge candidates.
+
+All four compare endpoints are **pure `trading.db` reads — no yfinance, no
+network**. Drill into any candidate via the per-ticker Vol monitor charts and
+the Pre-trade memo builder.
+
+**Provenance.** Each `vol_signals` row carries a `data_source` tag
+(`yfinance` for the daily/batch run, `unusual_whales` for the future UW
+backfill). This lets the planned UW historical import honour its
+"today's yfinance row wins" guardrail without guesswork, and keeps the compare
+view single-shape regardless of source.
 
 ---
 
