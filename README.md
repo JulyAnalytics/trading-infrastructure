@@ -1,4 +1,4 @@
-# Trading Infrastructure
+# Leopold
 
 A systematic trading research and execution infrastructure.
 

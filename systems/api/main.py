@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import sys
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -21,14 +22,42 @@ os.chdir(REPO_ROOT)
 from fastapi import FastAPI  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 
-from systems.api.routes import context, jobs, jordan, marcus, params, sarah  # noqa: E402
+from systems.api.routes import (  # noqa: E402
+    context, jobs, jordan, marcus, ops, params, priya, reports, sarah,
+)
+from systems.orchestration.instance import (  # noqa: E402
+    acquire_instance_lock, release_instance_lock,
+)
 from systems.orchestration.jobs import MANAGER  # noqa: E402
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # ── startup ──
+    # Singleton guard: take over from any stale API instance before we touch
+    # the scheduler / JobManager / DuckDB. Kills a live stale owner by SIGTERM
+    # (grace) then SIGKILL; cleans up a dead PID file from a `kill -9`.
+    acquire_instance_lock()
+    MANAGER.start()
+    # Phase 6 scheduler v2 — OpsParams-driven; master switch:
+    # ops.scheduler_enabled (Parameters page).
+    from systems.orchestration.scheduler_v2 import SCHEDULER
+    SCHEDULER.start()
+    yield
+    # ── shutdown ──
+    # FastAPI routes SIGTERM/SIGINT through this block before exit, so the
+    # scheduler thread stops cooperatively and the PID file is released only
+    # if it still names us (a newer instance may have already taken over).
+    SCHEDULER.stop()
+    release_instance_lock()
+
+
 app = FastAPI(
-    title="Trading Infrastructure Workstation",
+    title="Leopold API",
     version="1.0.0-phase1",
     description="FastAPI service layer over Marcus/Sarah/Priya/Jordan engines, "
                 "the parameter registry, and the job runner.",
+    lifespan=lifespan,
 )
 
 app.add_middleware(
@@ -47,6 +76,9 @@ app.include_router(context.router)
 app.include_router(marcus.router)
 app.include_router(jordan.router)
 app.include_router(sarah.router)
+app.include_router(priya.router)
+app.include_router(ops.router)
+app.include_router(reports.router)
 
 
 @app.get("/health")
@@ -63,11 +95,6 @@ def health() -> dict:
         checks[label] = "ok" if (REPO_ROOT / path).exists() else "missing"
     checks["job_running"] = MANAGER.current()
     return checks
-
-
-@app.on_event("startup")
-def _startup():
-    MANAGER.start()
 
 
 if __name__ == "__main__":

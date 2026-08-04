@@ -1,5 +1,5 @@
-# Trading Infrastructure — Claude Code Reference
-**Last updated:** 2026-07-06 — v1.0 workstation build (parameter registry + FastAPI/React) in progress; see `docs/architecture/v1_architecture.md`. Phase 0 gauntlet + Jordan suite verified green same day (see note below); Priya workbench (Phase 4), Sarah data completions (Phase 3), and scheduler v2 (Phase 6) remain unbuilt.
+# Leopold — Claude Code Reference
+**Last updated:** 2026-08-03 — **Sarah ← RCS trade intake seam live** (`systems/sarah/trade_intake.py`, `/api/sarah/intake`, `sarah_trade_inputs` + `sarah_intake_watermark`): a trade committed in RCS auto-triggers Sarah's vol pull and arrives pre-filled, leaving only `expected_move` (spec: `~/Nextcloud/Documents/Planning/sarah-rcs-trade-intake-spec.md`). Brought job **args** plumbing (`JOB_ARGS_JSON`) and `run_daily_vol(tickers=…)` batch mode with it. Earlier: v1.0 workstation build (parameter registry + FastAPI/React), see `docs/architecture/v1_architecture.md`; Phase 0 gauntlet + Jordan suite green 07-06; **Phase 3 (Sarah) complete 07-17** — five tools live (vol monitor + surface/cones, greeks/scenarios, memo builder → `pretrade_memos`, regime library + VVIX backfill to 2006).
 
 > **Environment note:** use `venv/bin/python` (Python 3.11.9 via pyenv), not
 > system `python3`. The venv's interpreter symlinks and script shebangs were
@@ -41,10 +41,12 @@ layer at :8100 with a React workstation frontend.
    loudly with a clear error — never silently proceed with stale data.
 5. Output contract schemas in `data/outputs/` are locked. Never change
    a schema without updating this document and `docs/architecture/`.
-6. The Research Capture System database
-   (`~/Nextcloud/Trading/research-capture-system/research/data/research.db`)
-   is READ-ONLY from this repo (SQLite `mode=ro` in `systems/risk/rcs_bridge.py`).
-   Never open it writable; RCS owns its own writes and backups (ADR-003).
+6. The Research Capture System database is READ-ONLY from this repo (SQLite
+   `mode=ro` in `systems/risk/rcs_bridge.py`). Never open it writable; RCS
+   owns its own writes and backups (ADR-003). Its location comes from
+   `config.RCS_DB_PATH`, which follows the RCS app's own `research/.env` —
+   live path today is `~/.local/state/rcs/research.db`, NOT the in-repo
+   `research/data/research.db` copy. Never hardcode either.
 7. Pipeline writes run one-at-a-time through job subprocesses
    (`systems/orchestration`); GET endpoints never write. Every run stamps
    `systems.params.all_active_hashes()` for reproducibility.
@@ -54,9 +56,15 @@ layer at :8100 with a React workstation frontend.
 ## Documentation Map
 
 **The wiki is the reference manual:** [docs/wiki/Home.md](docs/wiki/Home.md) —
-system overview, architecture, full DB/API/parameter schemas, per-component
-docs, and user workflows. Architecture snapshots: `docs/architecture/`;
-audits: `docs/audit/`; decisions: `docs/design_decisions/`.
+rebuilt 2026-07-18 as a learning-oriented operator's guide: per-component
+deep-dives (variables, computations, workflows), 8 step-by-step workflow
+guides, live screenshots (`docs/wiki/images/`, regenerate via
+`node scripts/capture_wiki_screenshots.mjs`), an LLM-assistant guide
+(`00-system/llm-assistant-guide.md`), and the Knowledge-Library integration
+spec (`06-knowledge/`). Every page carries `domain/stage/project/persona/
+status` frontmatter for the Ashurbanipal filesystem adapter. Architecture
+snapshots: `docs/architecture/`; audits: `docs/audit/`; decisions:
+`docs/design_decisions/`.
 
 ---
 
@@ -72,15 +80,22 @@ audits: `docs/audit/`; decisions: `docs/design_decisions/`.
 | Jordan risk layer | `systems/risk/` (book, limits, stress, verdict intake, RCS bridge) | via `/api/jordan/*`; `python scripts/verify_jordan.py` |
 | Golden-master harness | `scripts/golden_master.py`, `scripts/run_phase0_gauntlet.sh` | proves registry migration is behavior-neutral |
 
-New trading.db tables (v1.0): `parameter_versions`, `jobs`, `jordan_positions`.
+New trading.db tables (v1.0): `parameter_versions`, `jobs`, `jordan_positions`,
+`pretrade_memos` (stable `PTM-YYYYMMDD-TICKER-NNN` ids for RCS cross-links),
+`sarah_trade_inputs` + `sarah_intake_watermark` (RCS trade intake, 2026-08-03).
 Registry components: `marcus`, `sarah`, `priya`, `jordan`, `ops`, `data` — seeds
 mirror v0.5 config.py values exactly. Priya gate fields are `guarded`: editable,
 loudly logged, hash-stamped on outputs.
 
-Still pending (Phases 3/4/6): Sarah data completions (vol_surface population,
-U5.0/U5.1 backfills, memo persistence + regime-library GUI), Priya workbench,
-scheduler v2 + weekly review + alerting, Dash retirement, docs refresh of
-`current_state.md`. Kai + live trading are v1.1 (ADR-004).
+Still pending (Phase 6): scheduler v2 + weekly review + alerting, Dash
+retirement, docs refresh of `current_state.md`. Priya workbench (Phase 4)
+complete 07-18 — G4-1/G4-2/G4-7-writer closed, registry hashes → MLflow,
+workbench GUI at `/priya`. Audit #5
+(Jordan) complete 07-17 — `docs/audit/05_jordan_risk_layer.md`, live RCS smoke
+done, drawdown check activates with the Phase 6 NAV series.
+Kai + live trading are v1.1 (ADR-004). Phase 3 note: U5.0 was
+reconciled as moot — `vix_z1y` is runtime-computed from macro.db (VIX history
+1990→present), enriched per-date in `regime_library.enrich_snapshots_with_z_scores`.
 
 ---
 
@@ -146,9 +161,13 @@ scheduler v2 + weekly review + alerting, Dash retirement, docs refresh of
     "cpcv_path_count": 5, "n_trials": 8, "n_eff": 5.2,
     "min_track_record_years": 2.1, "leland_breakeven_spread": null,
     "regime_conditional_sharpe": {"RISK_ON_LOW_VOL": 1.2, "NEUTRAL": 0.8},
-    "written_at": "2026-04-06T14:30:00.000"
+    "regime_at_verdict": "RISK_ON_LOW_VOL", "regime_as_of": "2026-04-06",
+    "staleness_guidance": "…do not act if stale or regime shifted…",
+    "written_at": "2026-04-06T14:30:00.000+00:00"
 }
 ```
+*(regime_at_verdict / regime_as_of / staleness_guidance added 2026-07-17 —
+G4-7 writer side; consumed by `systems/risk/verdict_intake.py`.)*
 
 ---
 
@@ -162,6 +181,7 @@ scheduler v2 + weekly review + alerting, Dash retirement, docs refresh of
 | Sarah Stage 3 | ✅ Complete | `systems/sarah/scenario_engine.py` — scenario P&L engine — heatmap, stress scenarios (skew-amplified), structure comparison with break-even, kill scenario |
 | Sarah Stage 4 | ✅ Complete | `systems/sarah/pretrade_dashboard.py` — pre-trade dashboard: 5 panels, BL density, structure comparison, memo JSON |
 | Sarah Stage 5 (Complete) | ✅ Complete | `systems/sarah/regime_library.py` — regime library: VVIX feed, analog search, event library (6 events), pre-transition monitor |
+| Sarah ← RCS trade intake | ✅ Complete (2026-08-03) | `systems/sarah/trade_intake.py` — RCS `entity_events` poll → underlier map → Class-A/B pre-fills → coalesced `sarah_daily_vol` batch. `/api/sarah/intake`; `python scripts/verify_sarah_intake.py` |
 | Priya Stage 1 | ✅ Complete | `systems/backtest/data_audit.py`, `systems/backtest/hypothesis_registry.py` — data audit + hypothesis registration |
 | Priya Stage 2 | ✅ Complete | `systems/backtest/feature_engineering.py`, `systems/backtest/vol_estimators.py` — FracDiff + 5 vol estimators + vol cones |
 | Priya Stage 3 | ✅ Complete | `systems/backtest/label_construction.py` — triple-barrier labeling (Mode A/B, meta-labeling) + sample uniqueness weights; `systems/backtest/vectorized_engine.py` — VectorizedBacktester: run_single, parameter_sweep, regime_conditional_analysis, _flag_overfitting |
@@ -211,6 +231,8 @@ from systems.utils.db import get_connection, get_latest, get_series_history
 | `vol_surface` | daily_vol_run.py | Raw vol surface term structure |
 | `vvix_daily` | cboe_feed.py | Daily VVIX, VIX, ratio values |
 | `hypothesis_registry` | hypothesis_registry.py | Pre-registered research hypotheses + trial counts per dataset |
+| `sarah_trade_inputs` | trade_intake.py | Per-RCS-trade judgment inputs (`expected_move`) + Class-A/B pre-fills, keyed by RCS trade ULID |
+| `sarah_intake_watermark` | trade_intake.py | Single-row watermark over RCS `entity_events` (trading-side; RCS is never written) |
 
 ---
 
@@ -239,3 +261,5 @@ from systems.utils.db import get_connection, get_latest, get_series_history
 | `systems/config_phase0_deprecated.py` | Deprecated | Phase 0 only; only db_init.py uses it |
 | `systems/db_init.py` | Superseded | Phase 0 schema; `main.db` not used by pipeline |
 | `data/processed/main.db.deprecated` | Superseded | Phase 0 DB renamed; pipeline uses `macro.db` |
+| `scheduler.py` (root) | **Retired 2026-07-18 (code-enforced 2026-07-19)** | Replaced by `systems/orchestration/scheduler_v2.py` (in-process, OpsParams-driven, dependency-enforced). `__main__` now exits non-zero — refuses to run |
+| `systems/dashboard/macro_dashboard.py` | **App retired 2026-07-18** | Never run the :8050 Dash app (write-on-refresh); module kept — snapshot_generator imports its figure builders |
