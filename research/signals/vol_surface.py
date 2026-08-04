@@ -162,3 +162,82 @@ def extract_skew_slice(
         'skew_25d_rr':     rr_25d,
         'skew_1025_ratio': ratio_1025,
     }
+
+
+def extract_skew_by_delta(
+    calls_df: pd.DataFrame,
+    puts_df: pd.DataFrame,
+    deltas: tuple = (0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.50),
+) -> dict:
+    """
+    Full delta-space skew slice for a single expiration: IV (vol points) at
+    every 5Δ from 5Δ to 50Δ, both wings. Only strikes whose actual |delta| is
+    within 0.05 of the target are accepted, so thin chains yield sparse dicts
+    rather than wrong values.
+
+    Returns {'dte': int|None, 'puts': {'0.25': iv_vpts, ...}, 'calls': {...}}
+    """
+    def iv_near_delta(df: pd.DataFrame, target: float) -> float | None:
+        if df.empty or 'delta' not in df.columns or 'iv' not in df.columns:
+            return None
+        d = df.dropna(subset=['delta', 'iv'])
+        if d.empty:
+            return None
+        dist = (d['delta'].abs() - target).abs()
+        idx = dist.idxmin()
+        if dist.loc[idx] > 0.05:
+            return None
+        iv_raw = d.loc[idx, 'iv']
+        if iv_raw and iv_raw > 0:
+            return round(float(iv_raw) * 100.0, 3)
+        return None
+
+    dte = None
+    for df in (calls_df, puts_df):
+        if not df.empty and 'dte' in df.columns:
+            dte = int(df['dte'].iloc[0])
+            break
+
+    return {
+        'dte':   dte,
+        'puts':  {f'{t:.2f}': iv for t in deltas
+                  if (iv := iv_near_delta(puts_df, t)) is not None},
+        'calls': {f'{t:.2f}': iv for t in deltas
+                  if (iv := iv_near_delta(calls_df, t)) is not None},
+    }
+
+
+def compute_pc_oi_ratios(chain_data: dict) -> dict:
+    """
+    Put/call open-interest ratios from the enriched chain dict
+    ({exp_str}_c / {exp_str}_p keys). Consumed by the flow panel
+    ('aggregate_ratio') and stored as pc_oi_ratio_json.
+    """
+    total_put_oi = 0
+    total_call_oi = 0
+    by_expiration: dict[str, dict] = {}
+
+    for key, df in chain_data.items():
+        if df.empty or 'openInterest' not in df.columns:
+            continue
+        exp = key[:-2]  # strip _c / _p
+        oi = int(df['openInterest'].fillna(0).sum())
+        slot = by_expiration.setdefault(exp, {'put_oi': 0, 'call_oi': 0})
+        if key.endswith('_c'):
+            slot['call_oi'] += oi
+            total_call_oi += oi
+        elif key.endswith('_p'):
+            slot['put_oi'] += oi
+            total_put_oi += oi
+
+    for exp, slot in by_expiration.items():
+        slot['ratio'] = (round(slot['put_oi'] / slot['call_oi'], 4)
+                         if slot['call_oi'] > 0 else None)
+
+    return {
+        'aggregate_ratio': (round(total_put_oi / total_call_oi, 4)
+                            if total_call_oi > 0 else None),
+        'total_put_oi':    total_put_oi,
+        'total_call_oi':   total_call_oi,
+        'by_expiration':   by_expiration,
+    }

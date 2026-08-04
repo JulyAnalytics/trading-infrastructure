@@ -137,12 +137,12 @@ def compute_vix_vvix_signals(
         pre_transition_flag = (vvix_z1y is not None and vvix_z1y > 1.5 and vix_z1y < 0.5)
 
     return {
-        'vix':                 vix,
-        'vvix':                vvix,
-        'vix_z1y':             round(vix_z1y, 4),
-        'vvix_z1y':            round(vvix_z1y, 4) if vvix_z1y is not None else None,
-        'vvix_vix_ratio':      round(ratio, 2) if ratio is not None else None,
-        'pre_transition_flag': pre_transition_flag,
+        'vix':                 float(vix),
+        'vvix':                float(vvix) if vvix is not None else None,
+        'vix_z1y':             round(float(vix_z1y), 4),
+        'vvix_z1y':            round(float(vvix_z1y), 4) if vvix_z1y is not None else None,
+        'vvix_vix_ratio':      round(float(ratio), 2) if ratio is not None else None,
+        'pre_transition_flag': bool(pre_transition_flag),
         'pre_transition_note': (
             'VVIX elevated relative to its history while VIX is not. '
             'Historically precedes regime transitions. '
@@ -150,6 +150,103 @@ def compute_vix_vvix_signals(
             if pre_transition_flag else None
         ),
     }
+
+
+# ── GAP-001: macro.db staleness detection ────────────────────────────────────
+
+def macro_db_staleness(limit_hours: float | None = None,
+                       vix_history: Optional[pd.Series] = None) -> dict:
+    """
+    GAP-001 (upgrade path Appendix B): vix_z1y is sourced from macro.db, which
+    depends on Marcus's pipeline running. If macro.db is stale, vix_z1y
+    silently reflects old context. This helper makes that visible wherever the
+    feature vector is built.
+
+    Uses the latest VIX observation date in macro_series as the staleness
+    reference. Daily series settle T+1, so ~30h of age is normal; the warning
+    threshold defaults to the registry's regime_staleness_hours (80h,
+    weekend-tolerant) plus one settlement day.
+    """
+    import datetime
+
+    if limit_hours is None:
+        from systems.params import get_params
+        limit_hours = get_params("sarah").regime_staleness_hours + 24.0
+
+    if vix_history is None:
+        vix_history = get_vix_history()
+    if vix_history.empty:
+        return {
+            'last_vix_date': None, 'age_hours': None, 'stale': True,
+            'warning': ('macro.db has no VIX history — vix_z1y cannot be '
+                        'computed. Run the Marcus/FRED pipeline.'),
+        }
+
+    last_date = pd.Timestamp(vix_history.index[-1])
+    age_h = (datetime.datetime.now() - last_date.to_pydatetime()).total_seconds() / 3600
+    stale = age_h > limit_hours
+    warning = None
+    if stale:
+        warning = (
+            f"vix_z1y sourced from macro.db — last VIX observation "
+            f"{last_date.date()} ({age_h:.0f}h ago, limit {limit_hours:.0f}h). "
+            "Feature vector may reflect stale macro context. Run the "
+            "fred_incremental job."
+        )
+        logger.warning(warning)
+    return {
+        'last_vix_date': str(last_date.date()),
+        'age_hours': round(age_h, 1),
+        'stale': stale,
+        'warning': warning,
+    }
+
+
+# ── Feature-vector enrichment (vix_z1y / vvix_z1y per historical date) ───────
+
+def _rolling_z(series: pd.Series, window: int = 252, min_periods: int = 60) -> pd.Series:
+    """Rolling z-score of a series against its own trailing window."""
+    mean = series.rolling(window, min_periods=min_periods).mean()
+    std = series.rolling(window, min_periods=min_periods).std()
+    return (series - mean) / std.replace(0, np.nan)
+
+
+def enrich_snapshots_with_z_scores(
+    snapshots:    pd.DataFrame,
+    vix_history:  pd.Series,
+    vvix_history: Optional[pd.Series] = None,
+) -> pd.DataFrame:
+    """
+    Add vix_z1y (and vvix_z1y when history is supplied) columns to historical
+    vol_signals snapshots, computed per date from the full VIX/VVIX histories.
+
+    vix_z1y is NOT a stored column — it is derived at runtime from macro.db
+    (this is why upgrade-path item U5.0's backfill-the-NULL-column premise is
+    moot; there is no column to backfill). Dates with insufficient trailing
+    history stay NaN and are excluded from normalization naturally.
+    """
+    if snapshots.empty:
+        return snapshots
+    out = snapshots.copy()
+    dates = pd.to_datetime(pd.Series(out.index.astype(str)))
+
+    def map_z(history: pd.Series) -> np.ndarray:
+        h = history.copy()
+        h.index = pd.to_datetime(pd.Series(h.index.astype(str)))
+        z = _rolling_z(h)
+        # as-of alignment: last z at or before each snapshot date
+        z = z.sort_index()
+        idx = z.index.searchsorted(dates.values, side='right') - 1
+        vals = np.full(len(dates), np.nan)
+        ok = idx >= 0
+        vals[ok] = z.values[idx[ok]]
+        return vals
+
+    if vix_history is not None and not vix_history.empty:
+        out['vix_z1y'] = map_z(vix_history)
+    if vvix_history is not None and not vvix_history.empty:
+        out['vvix_z1y'] = map_z(vvix_history)
+    return out
 
 
 # ── Analog Search ─────────────────────────────────────────────────────────────

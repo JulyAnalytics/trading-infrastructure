@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { REGIME_COLORS, apiGet } from "../api";
+import { regimeColor, apiGet } from "../api";
+import RcsIntakePanel from "../components/RcsIntakePanel";
 
 const FRAGILITY_COLORS: Record<string, string> = {
   STABLE: "var(--green)",
@@ -9,10 +10,6 @@ const FRAGILITY_COLORS: Record<string, string> = {
   BREAKING: "var(--red)",
 };
 
-/**
- * Fragility-first hierarchy (Marcus improvements Gap 3): the 7am read is
- * "how fragile is the current regime", with the regime label as a badge.
- */
 export default function CommandDeck() {
   const [regime, setRegime] = useState<any>(null);
   const [regimeErr, setRegimeErr] = useState<string | null>(null);
@@ -20,6 +17,9 @@ export default function CommandDeck() {
   const [vol, setVol] = useState<any>(null);
   const [verdict, setVerdict] = useState<any>(null);
   const [jobs, setJobs] = useState<any>(null);
+  const [book, setBook] = useState<any>(null);
+  // Only for the Workspaces chip — the panel below owns its own fetching.
+  const [intakes, setIntakes] = useState<any[] | null>(null);
 
   useEffect(() => {
     apiGet("/api/context/regime").then(setRegime).catch((e) => setRegimeErr(e.message));
@@ -27,10 +27,15 @@ export default function CommandDeck() {
     apiGet("/api/context/vol-signals").then(setVol).catch(() => {});
     apiGet("/api/context/research-verdict").then(setVerdict).catch(() => {});
     apiGet("/api/jobs?limit=5").then(setJobs).catch(() => {});
+    apiGet("/api/jordan/book").then(setBook).catch(() => {});
+    apiGet<{ intakes: any[] }>("/api/sarah/intake")
+      .then((r) => setIntakes(r.intakes)).catch(() => {});
   }, []);
 
-  const color = regime ? REGIME_COLORS[regime.regime_state] : "#888";
-  const fragColor = fragility ? FRAGILITY_COLORS[fragility.fragility_level] : "#888";
+  const color = regime ? regimeColor(regime.regime_state) : "var(--muted)";
+  const fragColor = fragility
+    ? FRAGILITY_COLORS[fragility.fragility_level] ?? "var(--muted)"
+    : "var(--muted)";
   const div = fragility?.active_divergence;
   const prob = fragility?.p_transition_30d;
 
@@ -50,7 +55,7 @@ export default function CommandDeck() {
             Fragility: {fragility.fragility_level}
           </span>
           {regime && (
-            <span className="chip" style={{ color, borderColor: color, fontSize: 13 }}>
+            <span className="chip" style={{ color, borderColor: color, fontSize: "var(--fs-13)" }}>
               {regime.regime_state}{" "}
               {Number(regime.composite_score) >= 0 ? "+" : ""}
               {Number(regime.composite_score).toFixed(2)} · {regime.confidence}
@@ -96,18 +101,23 @@ export default function CommandDeck() {
         fragility && <div className="ok-box">No active divergence — regime internally consistent.</div>
       )}
 
+      <RcsIntakePanel compact />
+
       <div className="grid cols-3" style={{ marginTop: 14 }}>
         <div className="card">
           <h3>Vol signals (Sarah)</h3>
           {vol ? (
             <>
-              <div className="muted" style={{ fontSize: 12 }}>as of {vol.as_of}</div>
+              <div className="muted" style={{ fontSize: "var(--fs-12)" }}>as of {vol.as_of}</div>
               <table className="data">
                 <tbody>
                   {Object.entries<any>(vol.signals ?? {}).map(([tkr, s]) => (
                     <tr key={tkr}>
                       <td>{tkr}</td>
-                      <td>IV {(s.atm_iv_30d * 100).toFixed(1)}%</td>
+                      {/* atm_iv_30d is already in VOL POINTS (12.6 = 12.6%),
+                          same as the vol_signals table. The ×100 that used to
+                          be here rendered SPY as "1256.8%". */}
+                      <td>IV {Number(s.atm_iv_30d).toFixed(1)}%</td>
                       <td className="muted">{s.vrp_signal ?? s.vrp_proxy_signal ?? ""}</td>
                     </tr>
                   ))}
@@ -129,7 +139,7 @@ export default function CommandDeck() {
               <span className="chip">haircut SR {verdict.production_haircut_sharpe}</span>
               <span className="chip">DSR {verdict.dsr}</span>
               <span className="chip">PBO {verdict.pbo}</span>
-              <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+              <div className="muted" style={{ fontSize: "var(--fs-12)", marginTop: 6 }}>
                 {verdict.hypothesis_id} · {verdict.age_hours}h old
               </div>
             </>
@@ -154,11 +164,62 @@ export default function CommandDeck() {
 
       <div className="card" style={{ marginTop: 14 }}>
         <h3>Workspaces</h3>
-        <p>
-          <Link to="/marcus">Marcus — macro regime</Link> ·{" "}
-          <Link to="/params">Parameter registry</Link> ·{" "}
-          <span className="muted">Sarah / Priya / Jordan land in Phases 3–5</span>
-        </p>
+        <div className="workspace-rows">
+          <div className="workspace-row">
+            <Link to="/marcus">Marcus · Macro</Link>
+            {regime ? (
+              <span className="chip" style={{ color, borderColor: color }}>
+                {regime.regime_state} {Number(regime.composite_score) >= 0 ? "+" : ""}
+                {Number(regime.composite_score).toFixed(2)}
+              </span>
+            ) : (
+              <span className="chip bad">no regime_state.json</span>
+            )}
+          </div>
+
+          <div className="workspace-row">
+            <Link to="/sarah">Sarah · Vol</Link>
+            {vol?.signals ? (
+              <span className="chip">{Object.keys(vol.signals).length} tickers</span>
+            ) : (
+              <span className="chip warn">no signals yet</span>
+            )}
+            {(intakes ?? []).some((r) => r.needs_user.length > 0 || !r.has_vol_data) && (
+              <span className="chip warn">
+                {(intakes ?? []).filter(
+                  (r) => r.needs_user.length > 0 || !r.has_vol_data).length}{" "}
+                RCS trade(s) waiting
+              </span>
+            )}
+          </div>
+
+          <div className="workspace-row">
+            <Link to="/priya">Priya · Research</Link>
+            {verdict ? (
+              <span className={"chip " + (verdict.verdict === "GO" ? "ok" : "bad")}>
+                {verdict.verdict}
+              </span>
+            ) : (
+              <span className="chip warn">no verdict yet</span>
+            )}
+          </div>
+
+          <div className="workspace-row">
+            <Link to="/jordan">Jordan · Risk</Link>
+            {book ? (
+              <span className={"chip " + (book.counts.rcs + book.counts.manual > 0 ? "ok" : "")}>
+                {book.counts.rcs + book.counts.manual} positions
+              </span>
+            ) : (
+              <span className="chip warn">book empty</span>
+            )}
+          </div>
+
+          <div className="workspace-row">
+            <Link to="/params">Parameters</Link>
+            <span className="muted">control surface</span>
+          </div>
+        </div>
       </div>
     </div>
   );

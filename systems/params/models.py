@@ -240,6 +240,27 @@ class SarahParams(ParamsBase):
     # close → Monday morning weekend cycle, where Friday's regime is the correct
     # most-recent signal for Monday's run.
     regime_staleness_hours: float = 80.0
+    # Expirations fetched per ticker in the daily run. Weekly-chain tickers
+    # (SPY/QQQ/IWM) list ~3 expirations/week, so 6 reached only ~10 DTE and
+    # the 30/60/180d tenors were clamped extrapolations (ts_shape stuck on
+    # 'flat'). 24 reaches ~120-180 DTE at ~1 chain request per expiration.
+    chain_max_expirations: int = 24
+    # Seconds to pause between tickers in a BATCH run (the daily universe is
+    # unaffected — it is small and well-spaced already). Yahoo throttles at
+    # ~30+ rapid chain fetches; a small gap keeps large ad-hoc batches
+    # (earnings-week screening) under the limit. Batch mode only.
+    batch_inter_ticker_delay_s: float = 1.0
+
+    # RCS trade intake (Sarah ← RCS seam)
+    # Position tickers with no yfinance options chain (leveraged / inverse
+    # ETFs, thin names) mapped to the options-liquid underlier Sarah actually
+    # analyses. Class-C judgment input, reusable across trades — see
+    # docs/design_decisions/ADR-005 and the trade-intake spec §4.
+    underlier_map: dict = field(default_factory=lambda: {
+        "AMDL": "AMD", "GOOX": "GOOG", "GDXU": "GDX",
+    })
+    intake_poll_minutes: int = 5
+    intake_fire_on_idea: bool = True
 
     # Pre-trade dashboard
     catalyst_types: list = field(default_factory=lambda: [
@@ -285,6 +306,43 @@ class SarahParams(ParamsBase):
                     "drop below the intraday cadence you actually run at.",
             "bounds": (12, 168),
         },
+        "chain_max_expirations": {
+            "label": "Chain expirations per ticker",
+            "help": "How many listed expirations the daily run fetches. Must "
+                    "reach past 60 DTE on weekly-chain tickers or the 30/60/180d "
+                    "term structure degrades to a flat extrapolation. Each "
+                    "expiration is one yfinance request.",
+            "bounds": (4, 40),
+        },
+        "batch_inter_ticker_delay_s": {
+            "label": "Batch inter-ticker delay (s)",
+            "help": "Pause between tickers in an ad-hoc BATCH run (the daily "
+                    "universe is unaffected). Yahoo throttles ~30+ rapid chain "
+                    "fetches; this keeps a large screening batch under the limit.",
+            "bounds": (0.0, 10.0),
+        },
+        "underlier_map": {
+            "label": "Underlier map (position ticker → options-liquid underlier)",
+            "help": "Leveraged/inverse ETFs and thin names have no yfinance "
+                    "options chain. RCS trade intake resolves the position "
+                    "ticker through this map before enqueuing the vol pull. "
+                    "A ticker with no chain AND no entry becomes the one "
+                    "blocking question asked of you.",
+        },
+        "intake_poll_minutes": {
+            "label": "RCS intake poll interval (minutes)",
+            "help": "How often scheduler v2 checks RCS entity_events for newly "
+                    "activated (and, if enabled, newly created) option trades.",
+            "bounds": (1, 240),
+        },
+        "intake_fire_on_idea": {
+            "label": "Fire intake on idea-stage trades",
+            "help": "On: a trade created as an idea also triggers the vol pull, "
+                    "so the memo's structure comparison is available while the "
+                    "legs are still open (it is a chooser, not a monitor). Off: "
+                    "only idea→active fires. On costs extra chain pulls on ideas "
+                    "that never trade — they still accrue IV-rank history.",
+        },
         "catalyst_types": {"label": "Catalyst types",
                            "help": "Allowed catalyst_type values in TradeThesisInput."},
         "max_flow_notes_length": {"label": "Flow notes max length", "bounds": (50, 2000)},
@@ -317,6 +375,14 @@ class SarahParams(ParamsBase):
                     problems.append(f"stress_scenarios['{key}'] missing '{req}'")
         if self.grid_spot_step_pct >= self.grid_spot_range_pct:
             problems.append("grid_spot_step_pct must be smaller than grid_spot_range_pct")
+        for k, v in (self.underlier_map or {}).items():
+            if not isinstance(k, str) or not isinstance(v, str) or not k or not v:
+                problems.append(
+                    f"underlier_map['{k}']={v!r} — both sides must be non-empty "
+                    "ticker strings")
+            elif k.upper() == v.upper():
+                problems.append(
+                    f"underlier_map['{k}'] maps to itself — remove the entry")
         return problems
 
 
@@ -461,6 +527,9 @@ class OpsParams(ParamsBase):
     regime_staleness_hours_production: int = 12
     job_max_retries: int = 2
     job_retry_wait_seconds: int = 120
+    # Phase 6 scheduler v2
+    scheduler_enabled: bool = True
+    weekly_review_time: str = "17:00"       # Friday — Alex weekly review
 
     FIELD_SPECS = {
         "daily_pipeline_time": {"label": "Daily macro pipeline (HH:MM, weekdays)"},
@@ -475,12 +544,19 @@ class OpsParams(ParamsBase):
         },
         "job_max_retries": {"label": "Job max retries", "bounds": (0, 10)},
         "job_retry_wait_seconds": {"label": "Job retry wait (s)", "bounds": (5, 3600)},
+        "scheduler_enabled": {
+            "label": "Scheduler v2 enabled",
+            "help": "Master switch for the in-process schedule loop. Off = "
+                    "jobs run only when triggered manually.",
+        },
+        "weekly_review_time": {"label": "Weekly review (HH:MM, Friday)"},
     }
 
     def _validate_extra(self):
         problems = []
         for name in ("daily_pipeline_time", "vol_run_time", "snapshot_time",
-                     "weekly_refresh_time", "calendar_fetch_time"):
+                     "weekly_refresh_time", "calendar_fetch_time",
+                     "weekly_review_time"):
             v = getattr(self, name)
             parts = v.split(":")
             ok = (len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit()

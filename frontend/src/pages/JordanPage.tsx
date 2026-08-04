@@ -141,7 +141,7 @@ export default function JordanPage() {
                 {analysis.errors.map((e: any) => e.position?.ticker).join(", ")}
               </div>
             )}
-            <p className="muted" style={{ fontSize: 11.5 }}>{analysis.data_warning}</p>
+            <p className="muted" style={{ fontSize: "var(--fs-115)" }}>{analysis.data_warning}</p>
           </div>
 
           <div className="card">
@@ -195,7 +195,7 @@ export default function JordanPage() {
               ))}
             </tbody>
           </table>
-          <p className="muted" style={{ fontSize: 11.5 }}>{stress.methodology_note}</p>
+          <p className="muted" style={{ fontSize: "var(--fs-115)" }}>{stress.methodology_note}</p>
         </div>
       )}
 
@@ -253,7 +253,7 @@ export default function JordanPage() {
               {sizing.capped_by ? ` — capped by ${sizing.capped_by}` : ""}
             </div>
           )}
-          <p className="muted" style={{ fontSize: 11.5 }}>
+          <p className="muted" style={{ fontSize: "var(--fs-115)" }}>
             Size = (NAV × risk%) / |entry − stop|. NAV and limits are registry
             parameters (Jordan tab on the Parameters page).
           </p>
@@ -302,7 +302,7 @@ export default function JordanPage() {
                 disabled={!posForm.ticker || !posForm.quantity}>
           Add position
         </button>
-        <p className="muted" style={{ fontSize: 11.5 }}>
+        <p className="muted" style={{ fontSize: "var(--fs-115)" }}>
           Prefer journaling trades in the RCS — they appear here automatically.
           Manual entries are for anything outside the journal.
         </p>

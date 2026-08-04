@@ -169,6 +169,18 @@ def write_jordan_contract(
         except (TypeError, ValueError):
             return None
 
+    # G4-7 (writer side): stamp the regime this verdict was validated under.
+    # Jordan's intake compares regime_at_verdict against the live regime and
+    # refuses to size a strategy the regime has moved out from under.
+    regime_at_verdict = None
+    regime_as_of = None
+    try:
+        rs = json.loads((Path(OUTPUTS_DIR) / 'regime_state.json').read_text())
+        regime_at_verdict = rs.get('regime_state')
+        regime_as_of = rs.get('as_of')
+    except Exception:
+        pass
+
     contract = {
         'hypothesis_id':            hypothesis_id,
         'strategy_type':            strategy_type,
@@ -183,6 +195,15 @@ def write_jordan_contract(
         'n_eff':                    _safe(sharpe_analysis.get('n_eff')),
         'min_track_record_years':   _safe(sharpe_analysis.get('min_track_record_years')),
         'leland_breakeven_spread':  _safe(leland_breakeven),
+        'regime_at_verdict':        regime_at_verdict,
+        'regime_as_of':             regime_as_of,
+        'staleness_guidance': (
+            'Research-time statistics on historical data; the file does not '
+            'update as conditions change. Do not act if older than '
+            'jordan.verdict_max_age_hours or if the live regime differs from '
+            'regime_at_verdict without positive regime_conditional_sharpe '
+            'in the live regime (enforced by systems/risk/verdict_intake.py).'
+        ),
         'written_at':               datetime.now(timezone.utc).isoformat(),
     }
 
@@ -204,10 +225,11 @@ class ResearchPipeline:
     hypothesis_id : str
         Pre-registered hypothesis ID.  The caller is responsible for
         registering the hypothesis before instantiating this class.
-    n_trials : int
+    n_trials : int, optional
         Number of strategy/parameter configurations tested on this dataset.
-        Required for DSR computation.  If the caller does not track this
-        separately, use HypothesisRegistration.get_trial_count(dataset_id).
+        Required for DSR computation.  Default None = auto-resolve from the
+        hypothesis registry's trial counter for this hypothesis's dataset
+        (G4-1); pass an explicit int only when you track trials externally.
     allow_continue : bool
         If True, failed process gates log warnings instead of raising.
         Default False — hard stops at each gate are the correct behaviour
@@ -223,13 +245,20 @@ class ResearchPipeline:
     def __init__(
         self,
         hypothesis_id: str,
-        n_trials: int = 1,
+        n_trials: "int | None" = None,
         allow_continue: bool = False,
         cpcv_n_groups: int = CPCV_DEFAULT_N_GROUPS,
         cpcv_k_test: int = CPCV_DEFAULT_K_TEST,
         annualization_factor: int = 252,
     ) -> None:
         self.hypothesis_id = hypothesis_id
+        # G4-1: when the caller does not track trials explicitly, pull the
+        # count the registry has accumulated for this hypothesis's dataset
+        # (parameter_sweep(dataset_id=…) increments it automatically).
+        # Understated n_trials overstates DSR — the auto-resolve makes the
+        # honest count the default rather than the disciplined exception.
+        if n_trials is None:
+            n_trials = self._registry_trial_count(hypothesis_id)
         self.n_trials = n_trials
         self.allow_continue = allow_continue
         self.cpcv_n_groups = cpcv_n_groups
@@ -643,6 +672,25 @@ class ResearchPipeline:
             )
 
         return result
+
+    @staticmethod
+    def _registry_trial_count(hypothesis_id: str) -> int:
+        """Trial count for this hypothesis's dataset from the registry (≥1)."""
+        try:
+            from systems.backtest.hypothesis_registry import (
+                HypothesisRegistration,
+            )
+            reg = HypothesisRegistration()
+            h = reg.get(hypothesis_id)
+            if h and h.get('dataset_id'):
+                return max(1, int(reg.get_trial_count(h['dataset_id'])))
+        except Exception as exc:
+            warnings.warn(
+                f'n_trials auto-resolve failed ({exc}) — defaulting to 1. '
+                'DSR may be OVERSTATED if more trials were actually run.',
+                stacklevel=3,
+            )
+        return 1
 
     def _gate_fail(self, message: str) -> None:
         """Raise or warn depending on allow_continue setting."""

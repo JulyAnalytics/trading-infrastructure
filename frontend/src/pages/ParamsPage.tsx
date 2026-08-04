@@ -47,7 +47,7 @@ function FieldEditor({
         {dirty && (
           <button
             className="action secondary"
-            style={{ padding: "1px 8px", marginLeft: 8, fontSize: 11 }}
+            style={{ padding: "1px 8px", marginLeft: 8, fontSize: "var(--fs-11)" }}
             onClick={() => setDraft(undefined)}
           >
             reset
@@ -195,7 +195,7 @@ export default function ParamsPage() {
               {COMPONENT_LABELS[component]} — active v{info.version}{" "}
               <span className="mono muted">{info.hash}</span>
             </h3>
-            <p className="muted" style={{ fontSize: 12.5 }}>
+            <p className="muted" style={{ fontSize: "var(--fs-125)" }}>
               Every save creates a new version and stamps its hash on all
               subsequent runs. Rollback re-activates an old payload as a new
               version — history is never rewritten.

@@ -331,15 +331,32 @@ def fetch_calendar_data(fred: Fred, conn, days_ahead: int = 45):
 
     rows = []
 
+    # fredapi has no release-dates wrapper (get_release_dates does not exist
+    # in the installed version) — hit the REST endpoint directly. Future dates
+    # require include_release_dates_with_no_data=true.
+    import requests
+    from config import FRED_API_KEY
+
     for event_name, (release_id, category, component, importance) in FRED_RELEASE_MAP.items():
         try:
-            dates = fred.get_release_dates(
-                release_id,
-                realtime_start=today.strftime("%Y-%m-%d"),
-                realtime_end=end_date.strftime("%Y-%m-%d"),
+            resp = requests.get(
+                "https://api.stlouisfed.org/fred/release/dates",
+                params={
+                    "release_id": release_id,
+                    "api_key": FRED_API_KEY,
+                    "file_type": "json",
+                    "realtime_start": today.strftime("%Y-%m-%d"),
+                    "realtime_end": end_date.strftime("%Y-%m-%d"),
+                    "include_release_dates_with_no_data": "true",
+                    "sort_order": "asc",
+                },
+                timeout=15,
             )
-            for d in dates:
-                rows.append((event_name, d, category, importance, component, "fred"))
+            resp.raise_for_status()
+            for entry in resp.json().get("release_dates", []):
+                d = date.fromisoformat(entry["date"])
+                if today <= d <= end_date:
+                    rows.append((event_name, d, category, importance, component, "fred"))
         except Exception as e:
             logger.warning(f"Calendar: could not fetch {event_name}: {e}")
 

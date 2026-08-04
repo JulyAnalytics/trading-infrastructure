@@ -108,3 +108,44 @@ def fetch_vvix_daily() -> 'Optional[float]':
         logger.warning("VVIX fetch failed: {}", e)
         conn.close()
         return None
+
+
+VVIX_HISTORY_URL = (
+    "https://cdn.cboe.com/api/global/us_indices/daily_prices/VVIX_History.csv"
+)
+
+
+def fetch_vvix_history() -> 'pd.DataFrame':
+    """
+    Download CBOE's free daily VVIX history (2007–present).
+    Spec: U5.1 (sarah_vol_upgrade_path_stages_4_5_v2.md).
+
+    Returns a DataFrame with columns ['date', 'vvix'] (date as 'YYYY-MM-DD'
+    strings, ascending). Raises on download or parse failure — the caller
+    (backfill script) should fail loudly, not write a partial backfill.
+    """
+    import io
+    import pandas as pd
+    import requests
+
+    resp = requests.get(VVIX_HISTORY_URL, timeout=30)
+    resp.raise_for_status()
+    df = pd.read_csv(io.StringIO(resp.text))
+
+    df.columns = [c.strip().lower() for c in df.columns]
+    date_col = next(c for c in df.columns if 'date' in c)
+    vvix_col = next(c for c in df.columns if 'vvix' in c or c in ('close', 'value'))
+
+    out = pd.DataFrame({
+        'date': pd.to_datetime(df[date_col]).dt.strftime('%Y-%m-%d'),
+        'vvix': pd.to_numeric(df[vvix_col], errors='coerce'),
+    }).dropna().sort_values('date').reset_index(drop=True)
+
+    if len(out) < 1000:
+        raise ValueError(
+            f"VVIX history looks truncated: {len(out)} rows (expected 4000+). "
+            "CBOE CSV format may have changed — inspect before loading."
+        )
+    logger.info("CBOE VVIX history: {} rows, {} → {}",
+                len(out), out['date'].iloc[0], out['date'].iloc[-1])
+    return out

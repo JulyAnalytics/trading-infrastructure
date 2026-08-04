@@ -247,6 +247,19 @@ _SERIES_CHARTS = {
     "breakeven_10y":    ("10Y breakeven (%)", "breakeven_10y"),
 }
 
+# FRED publishes hy_spread (BAMLH0A0HYM2) and yield_curve_10_2 (T10Y2Y) in
+# percent, but their regime_thresholds (and the chart titles above) are in
+# basis points. When the stored values are still in percent, scale ×100 so
+# the data line and the bps threshold overlays share one Y axis — otherwise
+# the threshold lines (300–900 bps) squash the data (~3) into an apparently
+# flat hairline. Mirrors the heuristic in the Dash builders
+# (systems/dashboard/macro_dashboard.py). The abs().mean() guard keeps this
+# self-disabling if the data is ever persisted in bps upstream.
+_BPS_CONVERSION = {
+    "hy_spread":        20.0,  # mean |value| < 20 → stored in percent, scale ×100
+    "yield_curve_10_2": 5.0,   # mean |value| < 5  → stored in percent, scale ×100
+}
+
 
 @router.get("/charts/series/{name}")
 def chart_series(name: str, days: int = 756) -> dict:
@@ -255,10 +268,16 @@ def chart_series(name: str, days: int = 756) -> dict:
         raise HTTPException(404, f"unknown chart '{name}'; valid: {sorted(_SERIES_CHARTS)}")
     title, series_id = _SERIES_CHARTS[name]
     data = series(series_id, days)["rows"]
+    values = [r["value"] for r in data]
+    scale = _BPS_CONVERSION.get(series_id)
+    if scale is not None and values:
+        mean_abs = sum(abs(v) for v in values if v is not None) / len(values)
+        if mean_abs < scale:
+            values = [v * 100 if v is not None else v for v in values]
     fig = {
         "data": [{"type": "scatter", "mode": "lines",
                   "x": [r["date"] for r in data],
-                  "y": [r["value"] for r in data],
+                  "y": values,
                   "name": series_id, "line": {"color": "#33b5e5", "width": 1.5}}],
         "layout": {**_base_layout(title), "showlegend": False, "shapes": []},
     }

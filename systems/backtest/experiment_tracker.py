@@ -174,6 +174,19 @@ class ResearchTracker:
         if verdict not in ('GO', 'NO_GO'):
             raise ValueError(f"verdict must be 'GO' or 'NO_GO', got '{verdict}'")
 
+        # Registry reproducibility (platform rule 7): every research run is
+        # stamped with the ACTIVE parameter-version hashes, so a result can
+        # always be traced to the exact gates/costs/thresholds it ran under.
+        try:
+            from systems.params import all_active_hashes
+            params = {
+                **params,
+                **{f'registry_hash_{k}': v
+                   for k, v in all_active_hashes().items()},
+            }
+        except Exception:
+            pass  # registry unavailable (e.g. bare unit test) — never block a run
+
         missing = self._check_completeness(
             sharpe_analysis, cpcv_results, overfit_diagnostics,
             strategy_risk, impl_shortfall, mc_pnl,

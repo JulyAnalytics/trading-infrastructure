@@ -1,3 +1,10 @@
+---
+domain: trading-system
+stage: wiki
+project: v1-workstation
+status: active
+---
+
 # Verification — Results
 
 **Gauntlet run: 2026-07-06 — GREEN.** The v1.0 migration's core promise —
@@ -25,9 +32,14 @@ checked, not just assumed.
   field work.
 - Sarah's live endpoints (`/api/sarah/greeks`, `/scenario` pricing inputs)
   need yfinance network calls — untested this pass.
-- `docs/audit/05_jordan_risk_layer.md` still not written.
-- Phases 3/4/6 (Sarah data completions, Priya workbench, scheduler v2) are
-  unbuilt, not just unverified.
+
+> **Update (2026-07-18):** two bullets that previously appeared here are now
+> resolved — `docs/audit/05_jordan_risk_layer.md` is written, and Phases
+> 3/4/5/6 (Sarah data completions, Priya workbench, Jordan risk layer,
+> scheduler v2) are built and smoke-tested. See
+> [build-status.md](build-status.md) for the current delivery record. The
+> interactive six-page click-through above is the one item still genuinely
+> outstanding.
 
 Reasonable next step before relying on this daily: `venv/bin/python -m
 uvicorn systems.api.main:app --port 8100` + `cd frontend && npm run dev` →

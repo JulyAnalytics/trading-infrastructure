@@ -1,3 +1,10 @@
+---
+domain: trading-system
+stage: wiki
+project: v1-workstation
+status: active
+---
+
 # Output Contracts (`data/outputs/`)
 
 Four locked JSON files are the inter-component handshake. **Schemas are
@@ -52,7 +59,10 @@ summary contract. Check `ivr_ivp_confidence` in the DB before trusting
 rank/percentile.
 
 ## `pretrade_memo.json`
-**Writer:** Sarah Stage 4 (`generate_memo`) · **Reader:** the human (and, Phase 3, the persisted `pretrade_memos` table + RCS cross-links)
+**Writer:** Sarah Stage 4 (`generate_memo`) · **Reader:** the human. The
+file holds the *latest* memo; the durable record is
+`trading.db:pretrade_memos`, where every memo persists with a stable
+`memo_id` (`PTM-YYYYMMDD-TICKER-NNN`) for RCS/library cross-links.
 
 ```json
 { "ticker": "SPY", "date": "2026-03-31", "written_at": "2026-03-31T…",
@@ -76,15 +86,21 @@ rank/percentile.
   "cpcv_path_count": 5, "n_trials": 8, "n_eff": 5.2,
   "min_track_record_years": 2.1, "leland_breakeven_spread": null,
   "regime_conditional_sharpe": {"RISK_ON_LOW_VOL": 1.2, "NEUTRAL": 0.8},
-  "written_at": "2026-04-06T14:30:00.000"
+  "regime_at_verdict": "RISK_ON_LOW_VOL",
+  "regime_as_of": "2026-04-06",
+  "staleness_guidance": "…do not act if stale or regime shifted…",
+  "written_at": "2026-04-06T14:30:00.000+00:00"
 }
 ```
 
-**The G4-7 rule:** this file does not expire or watch the regime. Jordan's
-intake therefore re-checks freshness (`jordan.verdict_max_age_hours`) and
-regime compatibility (`regime_conditional_sharpe[current regime] > 0`)
-before any sizing — a GO is *never* actionable on its own. Phase 4 adds a
-`regime_at_verdict` stamp on the writer side.
+**The G4-7 rule (both halves closed 2026-07-17/18):** the file does not
+update as conditions change, so (writer side) it stamps
+`regime_at_verdict`/`regime_as_of`/`staleness_guidance` at write time, and
+(consumer side) Jordan's intake re-checks freshness
+(`jordan.verdict_max_age_hours`) and regime compatibility
+(`regime_conditional_sharpe[current regime] > 0`, with the stamp making a
+shift detectable) before any sizing — a GO is *never* actionable on its
+own. `written_at` is tz-aware UTC.
 
 ## Related artifacts (not contracts)
 

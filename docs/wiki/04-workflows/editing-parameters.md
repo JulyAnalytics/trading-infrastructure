@@ -1,3 +1,10 @@
+---
+domain: trading-system
+stage: wiki
+project: v1-workstation
+status: active
+---
+
 # Workflow — Editing Parameters Safely
 
 *Changing an assumption is a first-class, audited act. This is the loop that
@@ -52,8 +59,11 @@ the old payload **as a new version** (the trail is append-only), so
   under relaxed gates as provisional; note the justification.
 - **Jordan `nav`** — every limit is %-of-NAV; if NAV is wrong, every check
   is. Update it when capital changes.
-- **Ops times** — take effect when the Phase 6 scheduler lands; the legacy
-  `scheduler.py` has them compiled in until then.
+- **Ops times & scheduler** — scheduler v2 reads OpsParams **live on every
+  tick**: schedule-time edits apply within a minute, no restart. The master
+  switch is `ops.scheduler_enabled`. Retry policy
+  (`job_max_retries`/`job_retry_wait_seconds`) applies from the next
+  failure.
 
 ## Programmatic edits
 

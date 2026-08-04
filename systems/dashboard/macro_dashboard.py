@@ -1,8 +1,14 @@
 """
-Macro Dashboard — Phase 2 output UI.
-Runs as a local Dash app. Open http://127.0.0.1:8050 after starting.
+RETIRED as an app (2026-07-18, v1.0 Phase 6). The Marcus workspace in the
+React workstation (:5173 → /marcus, served by the :8100 API) reached parity
+in Phase 2; do not run this Dash app — its classify-on-page-refresh behavior
+violates the single-writer job discipline. The module itself stays because
+systems/reports/snapshot_generator.py imports its figure builders.
 
-Usage:
+Macro Dashboard — Phase 2 output UI (historical).
+Previously: local Dash app at http://127.0.0.1:8050.
+
+Usage (RETIRED — do not run):
     python dashboard/macro_dashboard.py
 
 Features (Phase 2):
@@ -1002,6 +1008,9 @@ def build_calendar_widget() -> dbc.Card:
         LIMIT 5
     """).df()
     conn.close()
+    # DuckDB .df() materializes DATE as datetime64 → pd.Timestamp at scalar
+    # access; coerce back to stdlib date so date arithmetic below is valid.
+    df["event_date"] = pd.to_datetime(df["event_date"]).dt.date
 
     if df.empty:
         return dbc.Card(dbc.CardBody([

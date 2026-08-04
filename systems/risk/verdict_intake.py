@@ -26,9 +26,12 @@ def _load(name: str) -> "dict | None":
 
 
 def _age_hours(written_at: str) -> "float | None":
+    """Age in hours; handles both naive and tz-aware timestamps (the real
+    Priya pipeline writes +00:00-aware ISO strings — verified live 2026-07-17)."""
     try:
-        return (datetime.now() - datetime.fromisoformat(written_at)
-                ).total_seconds() / 3600.0
+        written = datetime.fromisoformat(written_at)
+        now = datetime.now(written.tzinfo) if written.tzinfo else datetime.now()
+        return (now - written).total_seconds() / 3600.0
     except Exception:
         return None
 

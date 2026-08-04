@@ -27,6 +27,46 @@ from systems.utils.db import get_connection
 from systems.utils.pricing import forward_price, bs_price
 
 
+# Acceptable integration band for a recovered risk-neutral density. It must
+# integrate to 1.0; anything meaningfully either side of that is a chain-data
+# artifact, not a distribution. See breeden_litzenberger_density().
+BL_MASS_MIN = 0.85
+BL_MASS_MAX = 1.15
+
+
+def bl_mass_quality(total_mass: float) -> "tuple[bool, Optional[str]]":
+    """Is a recovered density usable, and if not, why — (reliable, note).
+
+    Extracted from breeden_litzenberger_density() so the gate is testable
+    without synthesising a chain that lands on a target mass (the intrinsic
+    kink dominates the second derivative, which makes such fixtures unreliable
+    in exactly the way this gate is meant to catch).
+
+    The band is TWO-SIDED. The original test was `total_mass >= 0.85`, which
+    passed AAOI's 4-DTE density at mass 13.71 as `reliable: true` — too much
+    mass is not a conservative error, it means the estimator amplified quote
+    noise and the moments are meaningless.
+    """
+    if BL_MASS_MIN <= total_mass <= BL_MASS_MAX:
+        return True, None
+    if total_mass < BL_MASS_MIN:
+        return False, (
+            f'Total mass = {total_mass:.2f} (< {BL_MASS_MIN}). A risk-neutral '
+            'density must integrate to ~1.0; too little mass means the chain '
+            'is too sparse to recover it. Exceedance probabilities may '
+            'UNDERSTATE tail risk. Use the straddle approximation instead.'
+        )
+    return False, (
+        f'Total mass = {total_mass:.2f} (> {BL_MASS_MAX}). A risk-neutral '
+        'density must integrate to ~1.0, so this is not a probability '
+        'distribution — the butterfly estimator has amplified quote noise '
+        '(wide spreads / sparse strikes, typical of short-dated event '
+        'chains). The shape, the exceedance probabilities and especially '
+        'the skew/kurtosis moments are NOT usable. The 1-SD figure is '
+        'still worth sanity-checking against the ATM straddle.'
+    )
+
+
 # ── Data Classes ──────────────────────────────────────────────────────────────
 
 @dataclass
@@ -156,14 +196,47 @@ def vol_level_panel(thesis: TradeThesisInput, signals: dict) -> dict:
     # N'(0) = 1/√(2π) ≈ 0.3989
     daily_theta_approx = -(spot * sigma * 0.3989) / (2 * np.sqrt(T) * 365.0) if T > 0 else 0.0
 
-    # Monthly cost-of-carry: vol points absorbed by theta over 30 days
-    monthly_carry_vpts = sigma * 100 * (1 - np.sqrt(max(0, (T * 365 - 30)) / (T * 365))) \
-        if T > 0 and T * 365 > 30 else atm_iv
+    # Cost-of-carry in vol points absorbed by theta over the holding period.
+    # For a thesis LONGER than 30 days this is the sqrt-time fraction of time
+    # value decayed in 30 days. For a thesis of 30 days or less the position
+    # is held to expiry, so 100% of the premium decays — the number is the
+    # full ATM IV, and calling that "monthly" carry is misleading on a 2-day
+    # trade. carry_horizon_days says which of the two it is.
+    held_to_expiry = not (T > 0 and T * 365 > 30)
+    carry_horizon_days = thesis.thesis_days if held_to_expiry else 30
+    monthly_carry_vpts = atm_iv if held_to_expiry else \
+        sigma * 100 * (1 - np.sqrt(max(0, (T * 365 - 30)) / (T * 365)))
 
     # Break-even move by expiration: ≈ ATM straddle value / spot
     # Straddle ≈ 2 × ATM_call ≈ 2 × S × σ × √T × N'(0) / N(0)
     # Simplified: BE ≈ σ × √T × √(2/π) ≈ σ × √T × 0.7979
     be_move_pct = sigma * np.sqrt(T) * 0.7979 * 100 if T > 0 else 0.0
+
+    # GAP-002 (upgrade path Appendix B): theta/vega carry is correct for a
+    # fixed position but ignores the option rolling DOWN the term structure
+    # over the holding period. In contango, a 60d option held 30d re-marks
+    # from IV(60d) to IV(30d) — an additional cost the flat number misses.
+    hold_days = min(30, thesis.thesis_days)
+    entry_days = thesis.thesis_days
+    rolled_days = max(thesis.thesis_days - hold_days, 7)
+    iv_entry = _interpolate_iv(signals, entry_days)
+    iv_rolled = _interpolate_iv(signals, rolled_days)
+    roll_down_vpts = None
+    roll_adjusted_carry_vpts = None
+    roll_unmeasurable = None
+    if _iv_is_clamped(signals, entry_days) and _iv_is_clamped(signals, rolled_days):
+        # Both lookups clamped to the same stored tenor, so their difference is
+        # 0 by construction — an artifact, not a measurement. Previously this
+        # reported a confident roll_down_vpts of 0.00.
+        roll_unmeasurable = (
+            f'Roll-down not measurable: vol_signals stores only the 30/60/180d '
+            f'tenors, and this thesis ({entry_days}d) sits outside that grid, '
+            f'so both ends of the roll clamp to the same point. Read the roll '
+            f'off the vol_surface table (full strike x expiry grid) instead of '
+            f'inferring it here.')
+    elif iv_entry > 0 and iv_rolled > 0:
+        roll_down_vpts = round(iv_entry - iv_rolled, 2)   # +ve in contango = extra cost
+        roll_adjusted_carry_vpts = round(monthly_carry_vpts + roll_down_vpts, 2)
 
     # 52-week IV range from history
     iv_history = _get_signal_history(thesis.ticker, 'atm_iv_30d', 252)
@@ -193,6 +266,20 @@ def vol_level_panel(thesis: TradeThesisInput, signals: dict) -> dict:
         'regime_bias':        regime_bias,
         'daily_theta_approx': round(daily_theta_approx, 2),
         'monthly_carry_vpts': round(monthly_carry_vpts, 2),
+        'carry_horizon_days': carry_horizon_days,
+        'carry_note':         (
+            f'Held to expiry ({carry_horizon_days}d) — 100% of the premium '
+            f'decays, so the carry figure IS the full ATM IV. Not a monthly '
+            f'rate.' if held_to_expiry else
+            f'Vol points decayed over 30 days of a {thesis.thesis_days}d '
+            f'holding period (sqrt-time).'),
+        'roll_down_vpts':     roll_down_vpts,
+        'roll_adjusted_carry_vpts': roll_adjusted_carry_vpts,
+        'roll_carry_note':    roll_unmeasurable or (
+            'Roll-adjusted carry interpolates along the term '
+            'structure over the holding period (GAP-002). '
+            'Positive roll_down_vpts = contango cost for longs.'
+            if roll_adjusted_carry_vpts is not None else None),
         'be_move_pct':        round(be_move_pct, 2),
         'iv_52w_low':         round(iv_52w_low, 2) if iv_52w_low is not None else None,
         'iv_52w_high':        round(iv_52w_high, 2) if iv_52w_high is not None else None,
@@ -204,10 +291,30 @@ def vol_level_panel(thesis: TradeThesisInput, signals: dict) -> dict:
 
 # ── Panel 2: Term Structure ──────────────────────────────────────────────────
 
+def _iv_is_clamped(ts_signals: dict, target_days: int) -> bool:
+    """True when target_days falls OUTSIDE the stored tenor grid, so
+    _interpolate_iv() returns an endpoint rather than an interpolation.
+
+    This matters because vol_signals stores only 30/60/180d. Any thesis
+    shorter than 30 days — every earnings-week trade — clamps to the 30d
+    point, and two clamped lookups differ by exactly 0. Reporting that 0 as a
+    measured roll-down is the bug this guards.
+    """
+    points = [d for d in (30, 60, 180)
+              if (ts_signals.get(f'ts_iv_{d}d') or 0) > 0]
+    if not points:
+        return True
+    return target_days <= min(points) or target_days >= max(points)
+
+
 def _interpolate_iv(ts_signals: dict, target_days: int) -> float:
     """
     Linear interpolation of IV at target_days from available DTE points.
     Uses 30d, 60d, 180d from vol_signals.
+
+    NOTE: clamps to the nearest endpoint outside that range. Use
+    _iv_is_clamped() before treating a difference of two lookups as a
+    measurement.
     """
     points = {
         30:  ts_signals.get('ts_iv_30d', 0.0),
@@ -380,27 +487,48 @@ def skew_panel(thesis: TradeThesisInput, signals: dict) -> dict:
     # Put wing premium vs call wing
     put_wing_premium = abs(skew_put) - abs(skew_call) if skew_put and skew_call else 0.0
 
-    # Wing cost relative to ATM
-    put_cost_vs_atm = abs(skew_put) if skew_put else 0.0
-    call_cost_vs_atm = abs(skew_call) if skew_call else 0.0
+    # Wing cost relative to ATM — a genuine DIFFERENTIAL (wing IV − ATM IV),
+    # not the wing's own IV level. This previously returned abs(skew_call),
+    # i.e. the raw 25Δ call IV, while being labelled "Cost vs ATM: +X vpts";
+    # on AAOI that printed "+244.9 vpts vs ATM" when the wing IV was 244.9 and
+    # ATM was 148.8 (a true differential of ~96).
+    #
+    # TENOR CAVEAT, surfaced rather than hidden: skew_25d_* come from the
+    # NEAREST expiration with both wings, while atm_iv_30d is a 30-day
+    # interpolation. On a short-dated event chain those are different tenors
+    # and the difference is dominated by term structure, not skew. The
+    # comparison is reported with `tenor_matched: False` so the caller can
+    # say so instead of implying a clean like-for-like read.
+    put_cost_vs_atm = (abs(skew_put) - abs(atm_iv)) if (skew_put and atm_iv) else None
+    call_cost_vs_atm = (abs(skew_call) - abs(atm_iv)) if (skew_call and atm_iv) else None
 
     # Directional alignment (only if expected_move_sign provided)
     directional_context = None
     if thesis.expected_move_sign is not None:
-        if thesis.expected_move_sign > 0:
-            directional_context = {
-                'aligned_wing': 'call',
-                'wing_cost_vs_atm': round(call_cost_vs_atm, 2),
-                'description': (f"For an up-side expected move, buying the call wing. "
-                                f"Cost vs ATM: +{call_cost_vs_atm:.1f} vpts.")
-            }
+        wing = 'call' if thesis.expected_move_sign > 0 else 'put'
+        diff = call_cost_vs_atm if wing == 'call' else put_cost_vs_atm
+        wing_iv = abs(skew_call) if wing == 'call' else abs(skew_put)
+        side = "up-side" if wing == 'call' else "down-side"
+        if diff is None:
+            description = (f"For an {side} expected move, the {wing} wing is the "
+                           f"aligned one. Wing/ATM IV unavailable — no cost "
+                           f"comparison.")
         else:
-            directional_context = {
-                'aligned_wing': 'put',
-                'wing_cost_vs_atm': round(put_cost_vs_atm, 2),
-                'description': (f"For a down-side expected move, buying the put wing. "
-                                f"Cost vs ATM: +{put_cost_vs_atm:.1f} vpts.")
-            }
+            description = (
+                f"For an {side} expected move, buying the {wing} wing. "
+                f"25Δ {wing} IV {wing_iv:.1f} vs ATM 30d {atm_iv:.1f} = "
+                f"{diff:+.1f} vpts. NOTE: different tenors — the wing IV is "
+                f"from the nearest expiration, ATM is the 30-day "
+                f"interpolation, so on a short-dated chain this gap is mostly "
+                f"term structure, not skew.")
+        directional_context = {
+            'aligned_wing': wing,
+            'wing_cost_vs_atm': round(diff, 2) if diff is not None else None,
+            'wing_iv': round(wing_iv, 2) if wing_iv else None,
+            'atm_iv_reference': round(atm_iv, 2) if atm_iv else None,
+            'tenor_matched': False,
+            'description': description,
+        }
 
     return {
         'skew_25d_rr':         round(skew_rr, 2) if skew_rr else 0.0,
@@ -513,8 +641,15 @@ def breeden_litzenberger_density(
     Returns dict with discrete probability density, exceedance probabilities,
     distribution moments, and comparison metrics.
 
-    Flags total_mass < 0.85 as unreliable — caller should fall back to
-    straddle approximation.
+    Flags total_mass outside [0.85, 1.15] as unreliable — caller should fall
+    back to the straddle approximation. The band is TWO-SIDED on purpose: a
+    risk-neutral density integrates to 1, so mass far ABOVE 1 is just as
+    broken as mass below it, and is the more likely failure on a thin chain.
+    BL is a second derivative of price with respect to strike, so it amplifies
+    quote noise — a sparse, wide-spread earnings chain can produce a density
+    integrating to many multiples of 1, whose higher moments are meaningless.
+    (Observed live 2026-08-03: AAOI 4-DTE gave total_mass 13.71 and was
+    reported `reliable: true` by the old one-sided `>= 0.85` test.)
     """
     T = dte / 365.0
     if T <= 0:
@@ -610,17 +745,13 @@ def breeden_litzenberger_density(
         )
 
     # Quality flag
-    reliable = total_mass >= 0.85
+    reliable, quality_note = bl_mass_quality(total_mass)
 
     return {
         'density_points':   density_points,      # list of {strike, prob_mass}
         'total_mass':       round(total_mass, 4),
         'reliable':         reliable,
-        'quality_note':     None if reliable else (
-            f'Total mass = {total_mass:.2f} (< 0.85). Chain data quality insufficient '
-            'for reliable density extraction. Exceedance probabilities may underestimate '
-            'tail risk. Consider straddle approximation as fallback.'
-        ),
+        'quality_note':     quality_note,
         'iem_1sd_pct':      round(std_implied / spot * 100, 2) if spot > 0 else 0.0,
 
         'prob_up_5pct':     round(prob_up_5pct, 4),
@@ -884,5 +1015,132 @@ def generate_memo(
     out_path = Path(OUTPUTS_DIR) / 'pretrade_memo.json'
     out_path.write_text(json.dumps(memo, indent=2, default=str))
     logger.info("Pre-trade memo written to {}", out_path)
+
+    return memo
+
+
+# ── Full dashboard orchestrator (Phase 3 memo builder) ───────────────────────
+
+def _to_native(o):
+    """Recursively convert numpy scalars → Python natives and NaN → None so
+    the memo is JSON-clean for the API response, the output contract file,
+    and the pretrade_memos row."""
+    if isinstance(o, dict):
+        return {k: _to_native(v) for k, v in o.items()}
+    if isinstance(o, (list, tuple)):
+        return [_to_native(v) for v in o]
+    if isinstance(o, np.generic):
+        o = o.item()
+    if isinstance(o, float) and o != o:
+        return None
+    return o
+
+def _modal_strike_spacing(calls: pd.DataFrame, forward: float) -> float:
+    """Most common spacing between listed strikes near the forward — used as
+    the butterfly width for BL density so $1-strike and $5-strike chains both
+    work."""
+    strikes = np.sort(calls['strike'].unique())
+    near = strikes[(strikes > forward * 0.9) & (strikes < forward * 1.1)]
+    diffs = np.diff(near if len(near) >= 3 else strikes)
+    diffs = diffs[diffs > 0]
+    if len(diffs) == 0:
+        return 5.0
+    vals, counts = np.unique(np.round(diffs, 4), return_counts=True)
+    return float(vals[np.argmax(counts)])
+
+
+def run_pretrade_dashboard(
+    thesis: TradeThesisInput,
+    flow:   Optional[FlowObservation] = None,
+    persist: bool = True,
+    rcs_trade_ulid: Optional[str] = None,
+) -> dict:
+    """
+    Assemble the full Stage 4 dashboard for a thesis: panels 1–3 (+ flow),
+    BL implied density on the expiration nearest thesis_days, structure
+    comparison, memo contract — and persist to pretrade_memos with a stable ID.
+
+    rcs_trade_ulid: when the memo prices an RCS trade, the citation key stored
+    on the persisted row so the PTM id ↔ trade link is structural rather than
+    a copy-paste (trade-intake spec §7 item 10).
+
+    Raises ValueError with a user-facing message when prerequisites are
+    missing (no vol_signals row, chain fetch failure).
+    """
+    from systems.data_feeds.options_feed import fetch_options_chain
+    from systems.sarah.vol_db import save_pretrade_memo
+
+    signals = _get_latest_signals(thesis.ticker)
+    if signals is None:
+        raise ValueError(
+            f"No vol_signals row for {thesis.ticker} — run the Sarah daily job first."
+        )
+
+    rate = signals.get('risk_free_rate') or 0.045
+
+    panels = {
+        'vol_level':      vol_level_panel(thesis, signals),
+        'term_structure': term_structure_panel(thesis, signals),
+        'skew':           skew_panel(thesis, signals),
+    }
+    flow_result = flow_panel(flow, signals, thesis) if flow is not None else None
+
+    # Live chain for density + structure pricing (12 expirations to reach
+    # monthly tenors on weekly-chain tickers)
+    chain_result = fetch_options_chain(thesis.ticker, rate, max_expirations=12)
+    if chain_result is None or not chain_result['chains']:
+        raise ValueError(
+            f"Options chain fetch failed for {thesis.ticker} — try again "
+            "(yfinance is flaky off-hours)."
+        )
+    spot = chain_result['spot']
+    chains = chain_result['chains']
+
+    # Expiration nearest the thesis horizon
+    dte_by_exp: dict[str, int] = {}
+    for key, df in chains.items():
+        if not df.empty and 'dte' in df.columns:
+            dte_by_exp[key[:-2]] = int(df['dte'].iloc[0])
+    if not dte_by_exp:
+        raise ValueError(f"No usable expirations in {thesis.ticker} chain.")
+    exp_str = min(dte_by_exp, key=lambda e: abs(dte_by_exp[e] - thesis.thesis_days))
+    dte = dte_by_exp[exp_str]
+
+    exp_frames = [chains.get(f"{exp_str}_c"), chains.get(f"{exp_str}_p")]
+    exp_chain = pd.concat([f for f in exp_frames if f is not None and not f.empty])
+    calls = exp_chain[exp_chain['option_type'] == 'calls']
+    forward = float(exp_chain['forward'].iloc[0]) if 'forward' in exp_chain.columns \
+        else forward_price(spot, rate, chain_result['div_yield'], dte)
+
+    distribution = breeden_litzenberger_density(
+        exp_chain, forward, rate, dte,
+        d_strike=_modal_strike_spacing(calls, forward) if not calls.empty else 5.0,
+    )
+    distribution['expiration_used'] = exp_str
+    distribution['dte_used'] = dte
+
+    structures = generate_structure_comparison(
+        thesis, panels, exp_chain, spot, forward, rate)
+
+    panels = _to_native(panels)
+    flow_result = _to_native(flow_result)
+    distribution = _to_native(distribution)
+    structures = _to_native(structures)
+
+    memo = generate_memo(thesis, signals, panels, structures,
+                         distribution, flow_result)
+    if rcs_trade_ulid:
+        memo['rcs_trade_ulid'] = rcs_trade_ulid
+
+    memo_id = None
+    if persist:
+        try:
+            from systems.params import all_active_hashes
+            hashes = all_active_hashes()
+        except Exception:
+            hashes = {}
+        memo_id = save_pretrade_memo(memo, hashes,
+                                     rcs_trade_ulid=rcs_trade_ulid)
+        memo['memo_id'] = memo_id
 
     return memo

@@ -31,3 +31,6 @@ uvicorn[standard]
 #     (a) pin plotly to 5.17 or earlier alongside vectorbt
 #     (b) use vectorbt-pro or a maintained fork
 #     (c) implement VectorizedBacktester without vectorbt using pandas/numpy directly
+# kaleido<1.0 bundles its own Chromium; 1.x requires Google Chrome installed
+# locally (plotly_get_chrome). Pinned to keep snapshot chart rendering hermetic.
+kaleido<1.0

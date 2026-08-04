@@ -39,6 +39,20 @@ def add_position(body: dict = Body(...)) -> dict:
         for f in ("flag", "strike", "expiration"):
             if not body.get(f):
                 raise HTTPException(422, f"option positions require '{f}'")
+    # An empty numeric field arrives from the browser as 0, and 0 passes the
+    # `not in (None, "")` presence check above. A zero-quantity (or
+    # zero-strike) position would sit in the book contributing no greeks and
+    # no exposure — invisible in every limit check, but present in the list.
+    numeric = ["quantity"] + (["strike"] if body["asset_type"] == "option" else [])
+    for f in numeric:
+        try:
+            value = float(body[f])
+        except (TypeError, ValueError):
+            raise HTTPException(422, f"{f} must be a number, got {body[f]!r}")
+        if abs(value) < 1e-9:
+            raise HTTPException(
+                422, f"{f} must be non-zero (got {body[f]!r}) — an empty "
+                     f"numeric field is submitted as 0.")
     return add_manual_position(body)
 
 

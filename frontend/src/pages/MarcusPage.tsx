@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { REGIME_COLORS, apiGet } from "../api";
+import { REGIME_COLORS, regimeColor, apiGet } from "../api";
 import PlotlyFig from "../components/PlotlyFig";
 
 type Summary = {
@@ -69,13 +69,16 @@ export default function MarcusPage() {
   const L = summary.latest;
   const div = L.divergence_type;
   const prob = summary.regime_change_probability;
+  // Theme-aware regime color; fall back to the backend-provided hex for
+  // regimes the frontend doesn't know.
+  const rc = REGIME_COLORS[L.regime] ?? summary.regime_color ?? "var(--muted)";
 
   return (
     <div>
       <h2>Marcus — Macro Regime</h2>
 
-      <div className="regime-banner" style={{ borderLeft: `6px solid ${summary.regime_color ?? "#888"}` }}>
-        <span className="label" style={{ color: summary.regime_color ?? "inherit" }}>
+      <div className="regime-banner" style={{ borderLeft: `6px solid ${rc}` }}>
+        <span className="label" style={{ color: rc }}>
           {L.regime}
         </span>
         <span className="score">
@@ -126,7 +129,7 @@ export default function MarcusPage() {
               ))}
             </tbody>
           </table>
-          <p className="muted" style={{ fontSize: 12 }}>
+          <p className="muted" style={{ fontSize: "var(--fs-12)" }}>
             Nearest regime: {summary.attribution.nearest_regime} (gap {summary.attribution.nearest_gap}).{" "}
             {prob.drivers.join(" · ")}
           </p>
@@ -145,8 +148,8 @@ export default function MarcusPage() {
                 <span className="chip">{it.severity}</span>
               </h3>
               <p style={{ margin: "4px 0" }}>{it.headline}</p>
-              <p className="muted" style={{ margin: "4px 0", fontSize: 12.5 }}>{it.regime_context}</p>
-              <p style={{ margin: "4px 0", fontSize: 12.5, color: "var(--amber)" }}>
+              <p className="muted" style={{ margin: "4px 0", fontSize: "var(--fs-125)" }}>{it.regime_context}</p>
+              <p style={{ margin: "4px 0", fontSize: "var(--fs-125)", color: "var(--amber)" }}>
                 ▸ {it.watch_condition}
               </p>
             </div>
@@ -199,7 +202,7 @@ export default function MarcusPage() {
                   {stateVector.geometry.nearest_historical_analogues.map((a: any) => (
                     <tr key={a.date}>
                       <td>{a.date}</td>
-                      <td style={{ color: REGIME_COLORS[a.regime] }}>{a.regime}</td>
+                      <td style={{ color: regimeColor(a.regime) }}>{a.regime}</td>
                       <td>{a.composite_score}</td>
                       <td>{a.similarity}</td>
                     </tr>
@@ -247,7 +250,7 @@ export default function MarcusPage() {
                 <tr key={i}>
                   <td>{String(t.date).slice(0, 10)}</td>
                   <td className="muted">{t.prev_regime} →</td>
-                  <td style={{ color: REGIME_COLORS[t.regime] }}>{t.regime}</td>
+                  <td style={{ color: regimeColor(t.regime) }}>{t.regime}</td>
                 </tr>
               ))}
             </tbody>
@@ -296,7 +299,7 @@ export default function MarcusPage() {
             <tbody>
               {returns.stats.map((r: any, i: number) => (
                 <tr key={i}>
-                  <td style={{ color: REGIME_COLORS[r.regime] }}>{r.regime}</td>
+                  <td style={{ color: regimeColor(r.regime) }}>{r.regime}</td>
                   <td>{r.asset}</td><td>{r.horizon}</td>
                   <td>{(r.median_return * 100).toFixed(1)}%</td>
                   <td>{(r.p25_return * 100).toFixed(1)}%</td>

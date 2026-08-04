@@ -1,3 +1,10 @@
+---
+domain: trading-system
+stage: wiki
+project: v1-workstation
+status: active
+---
+
 # Architecture
 
 ## Topology (v1.0)
@@ -14,7 +21,11 @@
                         │  • read-only DuckDB conns (503   │
                         │    on writer lock, never crash)  │
                         │  • params CRUD                   │
-                        │  • JobManager (1 worker thread)  │
+                        │  • JobManager (1 worker thread,  │
+                        │    retries + depends_on)         │
+                        │  • scheduler v2 (60s tick,       │
+                        │    OpsParams live)               │
+                        │  • alerts (feed + osascript)     │
                         └───┬──────────────┬───────────────┘
               spawns 1-at-a-time          reads
                         ┌───▼───────────┐  │
@@ -38,9 +49,9 @@
                                                     systems/risk/rcs_bridge
 ```
 
-Legacy (being retired): Dash dashboard at :8050
-(`systems/dashboard/macro_dashboard.py`) — display-only view of Marcus;
-superseded by the workstation's Marcus page.
+Retired 2026-07-18: the :8050 Dash dashboard and the root `scheduler.py`
+(deprecation banners in place; the Dash module's figure builders remain
+imported by the snapshot generator).
 
 ## The five integration mechanisms
 
@@ -89,9 +100,8 @@ call-time instead of import-time. New code must do the same
 
 | Port | What | Started by |
 |---|---|---|
-| 8100 | FastAPI service layer | `python -m systems.api.main` / uvicorn |
+| 8100 | FastAPI service layer (+ job worker + scheduler v2) | `python -m systems.api.main` / uvicorn |
 | 5173 | React dev server | `npm run dev` in `frontend/` |
-| 8050 | Legacy Dash dashboard | `python systems/dashboard/macro_dashboard.py` (retiring) |
 | 8099 | RCS journal app (separate repo) | `../research-capture-system/start.sh` |
 
 ## Design lineage

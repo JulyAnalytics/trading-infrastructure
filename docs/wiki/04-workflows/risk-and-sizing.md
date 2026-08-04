@@ -1,3 +1,11 @@
+---
+domain: trading-system
+stage: wiki
+project: v1-workstation
+persona: jordan
+status: active
+---
+
 # Workflow — Risk, Sizing & the Journal Loop
 
 *How a validated edge (or a discretionary thesis) becomes a sized position,
@@ -37,22 +45,25 @@ NAV × risk%.
 
 ## D. Watching the book
 
+- **Automated**: `jordan_daily_check` runs each weekday morning after the
+  vol run — it prices the book, evaluates limits, and raises an alert
+  (feed + macOS notification) on any breach. Limit discipline no longer
+  depends on you opening the page.
 - Daily (part of the [morning routine](morning-routine.md)): *Analyze book*
   → breach banner → utilization table → pricing-error list.
 - On regime WATCH/FRAGILE days: *Analyze + stress* — the six-shock table
   with per-position contributions and the worst-case chip. The stress
   library is registry data; add the scenario you're actually worried about.
-- Limit breach fires the red banner (and, from Phase 6, a notification).
-  The response is a decision, not an automation: trim, hedge, or —
-  consciously, with a note — raise the limit in the registry (versioned,
-  visible, reviewable).
+- On a breach, the response is a decision, not an automation: trim, hedge,
+  or — consciously, with a note — raise the limit in the registry
+  (versioned, visible, reviewable).
 
 ## E. Close the loop
 
 Exit → journal the exit in the RCS → position leaves Jordan's book →
 complete the RCS review (phase 1 → zone 3 → phase 2, mistake taxonomy).
-The Phase 6 weekly review will aggregate both sides: regime week, research
-runs, risk flags, journal activity.
+Friday's [weekly review](weekly-operations.md) aggregates both sides:
+regime week, vol summary, research runs, risk flags, journal activity.
 
 ## What Jordan will not do
 

@@ -1,4 +1,14 @@
-:root {
+/* ============================================================
+   Themes
+   Each theme is a block of CSS custom properties, applied via a
+   data-theme attribute on <html> (see src/theme.ts). To add a new
+   theme: duplicate a block below as :root[data-theme="<id>"] with
+   your palette, then register the id in THEMES in src/theme.ts.
+   Everything in this file below the theme blocks reads only var()s,
+   so no component CSS needs to change per theme.
+   ============================================================ */
+
+:root, :root[data-theme="dark"] {
   --bg: #12121f;
   --panel: #1a1a2e;
   --panel-2: #22223a;
@@ -6,11 +16,164 @@
   --text: #e0e0e0;
   --muted: #9a9ab0;
   --accent: #33b5e5;
+  --on-accent: #06202c;   /* text on accent backgrounds */
   --green: #00c851;
   --amber: #ffbb33;
   --orange: #ff8800;
   --red: #ff4444;
   --deep-red: #cc0000;
+  /* regime data colors (drives REGIME_COLORS in src/api.ts) */
+  --regime-risk-on-low-vol: #00c851;
+  --regime-risk-on-elevated-vol: #ffbb33;
+  --regime-neutral: #33b5e5;
+  --regime-caution: #ff8800;
+  --regime-risk-off-stress: #ff4444;
+  --regime-crisis: #cc0000;
+  /* type — stacks + size scale (every font-size in the app resolves here) */
+  --font-sans: -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-body: -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  --fs-105: 10.5px; --fs-11: 11px; --fs-115: 11.5px; --fs-12: 12px;
+  --fs-125: 12.5px; --fs-13: 13px; --fs-14: 14px; --fs-15: 15px;
+  --fs-18: 18px; --fs-24: 24px;
+}
+
+:root[data-theme="light"] {
+  --bg: #eef0f6;
+  --panel: #ffffff;
+  --panel-2: #e7eaf2;
+  --border: #d3d7e4;
+  --text: #1b1d2a;
+  --muted: #5c6074;
+  --accent: #0d6f9f;
+  --on-accent: #ffffff;
+  --green: #007a33;
+  --amber: #a06a00;
+  --orange: #b85e00;
+  --red: #c62828;
+  --deep-red: #9b0000;
+  --regime-risk-on-low-vol: #007a33;
+  --regime-risk-on-elevated-vol: #9a6700;
+  --regime-neutral: #0d6f9f;
+  --regime-caution: #b85e00;
+  --regime-risk-off-stress: #c62828;
+  --regime-crisis: #9b0000;
+  /* type — same scale as dark; a light theme typically keeps the default */
+  --font-sans: -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-body: -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  --fs-105: 10.5px; --fs-11: 11px; --fs-115: 11.5px; --fs-12: 12px;
+  --fs-125: 12.5px; --fs-13: 13px; --fs-14: 14px; --fs-15: 15px;
+  --fs-18: 18px; --fs-24: 24px;
+}
+
+/* "Terminal" — phosphor-green on near-black; worked example of the
+   theme-creation workflow (docs/wiki/04-workflows/creating-a-theme.md).
+   Contrast-checked 2026-08-03: text/muted/accent ≥4.5:1, status/regime
+   colors ≥3:1, on dark surfaces. */
+:root[data-theme="terminal"] {
+  --bg: #0a0f0a;
+  --panel: #101810;
+  --panel-2: #1c2c1c;
+  --border: #2a3a2a;
+  --text: #c8f7c8;
+  --muted: #7fae7f;
+  --accent: #4ade80;
+  --on-accent: #041404;
+  --green: #22c55e;
+  --amber: #eab308;
+  --orange: #f97316;
+  --red: #ef4444;
+  --deep-red: #dc2626;
+  --regime-risk-on-low-vol: #22c55e;
+  --regime-risk-on-elevated-vol: #eab308;
+  --regime-neutral: #4ade80;
+  --regime-caution: #f97316;
+  --regime-risk-off-stress: #ef4444;
+  --regime-crisis: #dc2626;
+  /* type — default stacks/scale */
+  --font-sans: -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-body: -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  --fs-105: 10.5px; --fs-11: 11px; --fs-115: 11.5px; --fs-12: 12px;
+  --fs-125: 12.5px; --fs-13: 13px; --fs-14: 14px; --fs-15: 15px;
+  --fs-18: 18px; --fs-24: 24px;
+}
+
+/* "Spring" — watercolour-paper light theme; warm cream surfaces anchored by
+   lush green, with a cool sky-periwinkle accent as the equinox counterweight.
+   Design proposal: docs/plans/spring-watercolour-theme-proposal.md.
+   Contrast-checked 2026-08-03: text/muted/accent ≥4.5:1 on bg and panel,
+   status/regime colors ≥4.5:1 as text on the cream surfaces. */
+:root[data-theme="spring"] {
+  --bg: #f1ede1;
+  --panel: #fbfaf4;
+  --panel-2: #e3dccb;        /* darkened from #e9e3d2 to clear bg~panel-2 ≥1.1:1 */
+  --border: #ccc0a8;
+  --text: #332a20;
+  --muted: #6f6453;
+  --accent: #4a6a96;        /* deepened from #5b7caa to clear 4.5:1 as text */
+  --on-accent: #fbfaf4;
+  --green: #256a2f;         /* darkened from #2e7d3a to clear risk-on 4.5:1 */
+  --amber: #a87100;
+  --orange: #bd5a1e;
+  --red: #c0392b;
+  --deep-red: #9b2d20;
+  /* regime data colors (drives REGIME_COLORS in src/api.ts)
+     Warm-earth ramp ordered by descending lightness within the red/orange
+     family so adjacent severity steps are mutually distinguishable, not
+     just hue-adjacent. */
+  --regime-risk-on-low-vol: #256a2f;
+  --regime-risk-on-elevated-vol: #b07d10;
+  --regime-neutral: #5a7a9a;
+  --regime-caution: #9a3a14;       /* brown-brick — max lightness sep from elevated-vol amber; clear of stress by lightness */
+  --regime-risk-off-stress: #c0392b;
+  --regime-crisis: #7a1f15;        /* deepened to separate from stress + add severity */
+  /* type — default stacks/scale */
+  --font-sans: -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-body: -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  --fs-105: 10.5px; --fs-11: 11px; --fs-115: 11.5px; --fs-12: 12px;
+  --fs-125: 12.5px; --fs-13: 13px; --fs-14: 14px; --fs-15: 15px;
+  --fs-18: 18px; --fs-24: 24px;
+}
+
+/* "Spring Shade" — the under-the-tree dark companion: deep lush-green
+   near-black surfaces with a brightened cool sky accent (Albers subtraction —
+   a dark ground subtracts darkness, so the cool accent lightens to hold its
+   frosty read). Design proposal: docs/plans/spring-watercolour-theme-proposal.md.
+   Contrast-checked 2026-08-03: text/muted ≥4.5:1, accent ≥4.5:1 as text,
+   status/regime colors ≥3:1 on dark surfaces. */
+:root[data-theme="spring-shade"] {
+  --bg: #16241c;
+  --panel: #1f3026;
+  --panel-2: #364538;        /* lightened from #324030 to clear panel-2~border ≥1.1:1 */
+  --border: #48563f;         /* lightened from #3a4536 to widen from panel-2 */
+  --text: #ece9df;
+  --muted: #9aa896;
+  --accent: #8fb4d8;
+  --on-accent: #1a1320;
+  --green: #5fbf6a;
+  --amber: #e0a83a;
+  --orange: #e07b3a;
+  --red: #e85d52;
+  --deep-red: #c9423a;
+  /* regime data colors (drives REGIME_COLORS in src/api.ts)
+     Warm-earth ramp ordered by descending lightness within the red family so
+     adjacent severity steps are mutually distinguishable on dark green. */
+  --regime-risk-on-low-vol: #5fbf6a;
+  --regime-risk-on-elevated-vol: #d9a233;
+  --regime-neutral: #7fa6c4;
+  --regime-caution: #ea580c;        /* orange — clear of elevated-vol amber; caution↔stress read as gradient */
+  --regime-risk-off-stress: #f06554;
+  --regime-crisis: #ec4899;         /* magenta-rose — hue-shifted off stress red for clear separation on dark */
+  /* type — default stacks/scale */
+  --font-sans: -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-body: -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  --fs-105: 10.5px; --fs-11: 11px; --fs-115: 11.5px; --fs-12: 12px;
+  --fs-125: 12.5px; --fs-13: 13px; --fs-14: 14px; --fs-15: 15px;
+  --fs-18: 18px; --fs-24: 24px;
 }
 
 * { box-sizing: border-box; }
@@ -19,8 +182,8 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
-  font-family: -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
-  font-size: 14px;
+  font-family: var(--font-sans);
+  font-size: var(--fs-14);
 }
 
 a { color: var(--accent); text-decoration: none; }
@@ -33,8 +196,9 @@ a { color: var(--accent); text-decoration: none; }
   border-right: 1px solid var(--border);
   padding: 14px 10px;
   position: sticky; top: 0; height: 100vh;
+  display: flex; flex-direction: column;
 }
-.sidenav h1 { font-size: 15px; margin: 4px 8px 18px; letter-spacing: 0.4px; }
+.sidenav h1 { font-size: var(--fs-15); margin: 4px 8px 18px; letter-spacing: 0.4px; }
 .sidenav h1 span { color: var(--accent); }
 .sidenav .navlink {
   display: block; padding: 8px 10px; margin: 2px 0;
@@ -42,11 +206,12 @@ a { color: var(--accent); text-decoration: none; }
 }
 .sidenav .navlink:hover { background: var(--panel-2); }
 .sidenav .navlink.active { background: var(--panel-2); color: var(--accent); }
-.sidenav .section { margin: 16px 8px 6px; font-size: 11px; color: var(--muted);
+.sidenav .section { margin: 16px 8px 6px; font-size: var(--fs-11); color: var(--muted);
   text-transform: uppercase; letter-spacing: 1px; }
+.sidenav .theme-select { margin-top: auto; }
 
 .main { flex: 1; padding: 18px 22px; min-width: 0; }
-.main h2 { margin: 0 0 14px; font-size: 18px; }
+.main h2 { margin: 0 0 14px; font-size: var(--fs-18); }
 
 .grid { display: grid; gap: 14px; }
 .grid.cols-2 { grid-template-columns: 1fr 1fr; }
@@ -59,7 +224,7 @@ a { color: var(--accent); text-decoration: none; }
   border-radius: 8px;
   padding: 14px;
 }
-.card h3 { margin: 0 0 10px; font-size: 13px; color: var(--muted);
+.card h3 { margin: 0 0 10px; font-size: var(--fs-13); color: var(--muted);
   text-transform: uppercase; letter-spacing: 0.8px; }
 
 .regime-banner {
@@ -67,20 +232,26 @@ a { color: var(--accent); text-decoration: none; }
   padding: 16px; border-radius: 8px; border: 1px solid var(--border);
   background: var(--panel);
 }
-.regime-banner .label { font-size: 24px; font-weight: 700; }
-.regime-banner .score { font-size: 18px; color: var(--muted); }
+.regime-banner .label { font-size: var(--fs-24); font-weight: 700; }
+.regime-banner .score { font-size: var(--fs-18); color: var(--muted); }
 
 .chip {
   display: inline-block; padding: 2px 9px; border-radius: 10px;
-  font-size: 11.5px; background: var(--panel-2); color: var(--muted);
+  font-size: var(--fs-115); background: var(--panel-2); color: var(--muted);
   border: 1px solid var(--border); margin: 2px 3px 2px 0;
 }
 .chip.ok { color: var(--green); border-color: var(--green); }
 .chip.warn { color: var(--amber); border-color: var(--amber); }
 .chip.bad { color: var(--red); border-color: var(--red); }
 
+.workspace-rows { display: flex; flex-direction: column; gap: 6px; }
+.workspace-row {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; padding: 4px 0;
+}
+
 .scorebar { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
-.scorebar .name { width: 92px; color: var(--muted); font-size: 12.5px; }
+.scorebar .name { width: 92px; color: var(--muted); font-size: var(--fs-125); }
 .scorebar .track {
   flex: 1; height: 12px; background: var(--panel-2);
   border-radius: 6px; position: relative; overflow: hidden;
@@ -92,24 +263,24 @@ a { color: var(--accent); text-decoration: none; }
 .scorebar .fill { position: absolute; top: 0; bottom: 0; border-radius: 6px; }
 .scorebar .val { width: 48px; text-align: right; font-variant-numeric: tabular-nums; }
 
-table.data { width: 100%; border-collapse: collapse; font-size: 13px; }
+table.data { width: 100%; border-collapse: collapse; font-size: var(--fs-13); }
 table.data th, table.data td {
   text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border);
   font-variant-numeric: tabular-nums;
 }
-table.data th { color: var(--muted); font-weight: 600; font-size: 11.5px;
+table.data th { color: var(--muted); font-weight: 600; font-size: var(--fs-115);
   text-transform: uppercase; letter-spacing: 0.6px; }
 table.data tr:hover td { background: var(--panel-2); }
 
 .tabs { display: flex; gap: 4px; margin-bottom: 10px; flex-wrap: wrap; }
 .tabs button {
   background: var(--panel-2); color: var(--text); border: 1px solid var(--border);
-  padding: 5px 12px; border-radius: 6px; cursor: pointer; font-size: 12.5px;
+  padding: 5px 12px; border-radius: 6px; cursor: pointer; font-size: var(--fs-125);
 }
 .tabs button.active { border-color: var(--accent); color: var(--accent); }
 
 button.action {
-  background: var(--accent); color: #06202c; font-weight: 600;
+  background: var(--accent); color: var(--on-accent); font-weight: 600;
   border: none; padding: 7px 14px; border-radius: 6px; cursor: pointer;
 }
 button.action:disabled { opacity: 0.45; cursor: default; }
@@ -119,33 +290,40 @@ button.action.danger { background: var(--red); color: #fff; }
 
 input, textarea, select {
   background: var(--bg); color: var(--text); border: 1px solid var(--border);
-  border-radius: 6px; padding: 6px 8px; font-size: 13px; font-family: inherit;
+  border-radius: 6px; padding: 6px 8px; font-size: var(--fs-13); font-family: var(--font-body);
   width: 100%;
 }
-textarea.json { font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 12px; min-height: 90px; }
+textarea.json { font-family: var(--font-mono);
+  font-size: var(--fs-12); min-height: 90px; }
+
+/* reading text follows --font-body (the font-pack "play" role; see
+   docs/wiki/04-workflows/creating-a-theme.md §7). textarea.json and
+   .mono stay on --font-mono via specificity, regardless of pack. */
+p, .field .label, .field .help, .notice-box, .error-box, .ok-box, .loading {
+  font-family: var(--font-body);
+}
 
 .field { margin-bottom: 12px; }
-.field .label { font-size: 12.5px; margin-bottom: 3px; }
-.field .help { font-size: 11.5px; color: var(--muted); margin-top: 3px; }
+.field .label { font-size: var(--fs-125); margin-bottom: 3px; }
+.field .help { font-size: var(--fs-115); color: var(--muted); margin-top: 3px; }
 .field.dirty .label { color: var(--amber); }
 
 .error-box {
-  border: 1px solid var(--red); background: rgba(255, 68, 68, 0.08);
+  border: 1px solid var(--red); background: color-mix(in srgb, var(--red) 9%, transparent);
   color: var(--red); padding: 10px 12px; border-radius: 6px; margin: 10px 0;
-  white-space: pre-wrap; font-size: 12.5px;
+  white-space: pre-wrap; font-size: var(--fs-125);
 }
 .notice-box {
-  border: 1px solid var(--amber); background: rgba(255, 187, 51, 0.08);
+  border: 1px solid var(--amber); background: color-mix(in srgb, var(--amber) 9%, transparent);
   color: var(--amber); padding: 10px 12px; border-radius: 6px; margin: 10px 0;
-  font-size: 12.5px;
+  font-size: var(--fs-125);
 }
 .ok-box {
-  border: 1px solid var(--green); background: rgba(0, 200, 81, 0.08);
+  border: 1px solid var(--green); background: color-mix(in srgb, var(--green) 9%, transparent);
   color: var(--green); padding: 10px 12px; border-radius: 6px; margin: 10px 0;
-  font-size: 12.5px;
+  font-size: var(--fs-125);
 }
 
 .muted { color: var(--muted); }
-.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.mono { font-family: var(--font-mono); font-size: var(--fs-12); }
 .loading { color: var(--muted); padding: 24px; text-align: center; }

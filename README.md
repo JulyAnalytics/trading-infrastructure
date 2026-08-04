@@ -15,7 +15,7 @@ A systematic trading research and execution infrastructure.
 | **Jordan** — risk layer | ⬜ Not built | `systems/risk/` |
 | **Priya** — research backtesting | ⬜ Not built | `research/` |
 | **Kai** — execution layer | ⬜ Not built | `systems/execution/` |
-| **Alex** — orchestration | ⚠️ Framework only | `scheduler.py` |
+| **Alex** — orchestration | ✅ Live (scheduler v2, inside the API) | `systems/orchestration/scheduler_v2.py` |
 
 ## Databases
 
@@ -54,11 +54,20 @@ python scripts/verify_phase0.py
 
 ## Pipeline
 
-The scheduler runs automatically:
-- **Weekdays 08:00** — Sarah vol surface run (requires Marcus regime_state.json)
+There is no separate scheduler process — **scheduler v2 runs inside the API**
+(`systems/orchestration/scheduler_v2.py`), so start the API and the daily
+pipeline runs automatically:
+- **Weekdays 08:00** — Sarah vol surface run → Jordan daily check (requires Marcus regime_state.json; refreshes Marcus first when stale)
 - **Weekdays 18:05** — Marcus macro pipeline (FRED → regime classify → snapshot)
 - **Sunday 20:00** — Full FRED history refresh
+- **Friday 17:00** — Weekly review
 
 ```bash
-python scheduler.py
+venv/bin/python -m uvicorn systems.api.main:app --host 127.0.0.1 --port 8100
 ```
+
+On the MacBook the API auto-starts at login via the infra-launcher
+(`~/Nextcloud/Tools/infra-launcher/projects.json`, `trading-api` is marked
+`"autostart": true`), so scheduled runs survive reboots without a panel click.
+The legacy root `scheduler.py` is **retired — do not run it** (it now exits
+non-zero). Missed jobs run once on catch-up when the API is next up.

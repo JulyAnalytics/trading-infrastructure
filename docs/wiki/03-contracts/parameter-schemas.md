@@ -1,3 +1,10 @@
+---
+domain: trading-system
+stage: wiki
+project: v1-workstation
+status: active
+---
+
 # Parameter Schemas — every registry field
 
 Source of truth: `systems/params/models.py` (defaults mirror v0.5 exactly;
@@ -31,8 +38,9 @@ Legacy config-name mapping: `systems/params/compat.py`.
 | fred_risk_free_series / risk_free_fallback | DGS3MO / 0.045 | fallback 0–0.15 | |
 | vol_ivr_min_history_days | 60 | 20–756 | IVR/IVP confidence floor |
 | analog_min_history_days | 120 | 30–756 | analog-search warning floor |
-| vvix_confidence_min_days | 504 | 60–1260 | VVIX joins the feature vector after ~2y |
+| vvix_confidence_min_days | 504 | 60–1260 | VVIX joins the feature vector after ~2y (the 2006+ backfill satisfies this from day one) |
 | regime_staleness_hours | 80 | 12–168 | max age of regime_state.json the daily vol run accepts; 80h covers the Friday→Monday weekend cycle |
+| chain_max_expirations | 24 | 4–40 | expirations fetched per ticker in the daily run — must reach past 60 DTE on weekly-chain tickers or the term structure degrades to a flat extrapolation |
 | catalyst_types | macro_slow · macro_catalyst · event_specific · technical | | TradeThesisInput enum |
 | max_flow_notes_length | 200 | 50–2000 | |
 | grid_spot_range_pct / _step_pct | 0.30 / 0.025 | step < range | scenario grid geometry |
@@ -74,7 +82,7 @@ Legacy config-name mapping: `systems/params/compat.py`.
 | max_net_delta_pct | 0.20 | 0.01–2.0 | |net delta $| / NAV |
 | max_net_vega_pct | 0.15 | 0.01–2.0 | |net vega $/vpt| / NAV |
 | max_single_position_pct | 0.05 | 0.005–1.0 | notional / NAV; also caps the sizer |
-| drawdown_alert_pct / drawdown_halt_pct | 0.08 / 0.15 | alert < halt | declared; evaluated from Phase 6 NAV history |
+| drawdown_alert_pct / drawdown_halt_pct | 0.08 / 0.15 | alert < halt | declared; activates once a NAV/P&L history exists (audit #5's top open item) |
 | min_liquidity_days | 5 | 1–60 | declared; needs volume data |
 | default_risk_pct_per_trade | 0.01 | 0.001–0.05 | sizer default |
 | verdict_max_age_hours | 168 | 1–2160 | intake freshness gate |
@@ -83,10 +91,12 @@ Legacy config-name mapping: `systems/params/compat.py`.
 
 | Field | Default | Notes |
 |---|---|---|
-| daily_pipeline_time / vol_run_time / snapshot_time | 18:05 / 08:00 / 18:15 | weekdays (HH:MM validated) |
-| weekly_refresh_time / calendar_fetch_time | 20:00 / 20:05 | Sundays |
+| daily_pipeline_time / vol_run_time / snapshot_time | 18:05 / 08:00 / 18:15 | weekdays (HH:MM validated); read live by scheduler v2 |
+| weekly_refresh_time / calendar_fetch_time | 20:00 / 20:05 | Sundays (calendar rides every FRED pull; the separate time is vestigial) |
+| weekly_review_time | 17:00 | Fridays — the weekly review job |
+| scheduler_enabled | true | master switch for scheduler v2 |
 | regime_staleness_hours_production | 12 | CLAUDE.md Rule 4 |
-| job_max_retries / job_retry_wait_seconds | 2 / 120 | scheduler v2 policy |
+| job_max_retries / job_retry_wait_seconds | 2 / 120 | retry ladder before a failure alerts |
 
 ## data
 

@@ -1,3 +1,10 @@
+---
+domain: trading-system
+stage: wiki
+project: v1-workstation
+status: active
+---
+
 # Parameter Registry
 
 **Status:** 🟡 unverified · **Code:** `systems/params/` · **GUI:** *Parameters* page
@@ -15,7 +22,7 @@ Six components, one dataclass each (`systems/params/models.py`):
 | Component | Governs | Highlights |
 |---|---|---|
 | `marcus` | regime classification | weights, threshold families, score→regime floors, divergence + confidence cutoffs, staleness windows |
-| `sarah` | vol pipeline + scenario tools | tickers, IVR/analog/VVIX windows, catalyst types, full grid geometry, **the stress-scenario library itself**, kill assumptions, break-even search |
+| `sarah` | vol pipeline + scenario tools + RCS trade intake | tickers, IVR/analog/VVIX windows, catalyst types, full grid geometry, **the stress-scenario library itself**, kill assumptions, break-even search, **`underlier_map`** (position ticker → options-liquid underlier), `intake_poll_minutes`, `intake_fire_on_idea` |
 | `priya` | research engine + gates | min observations, spread floors, **gate thresholds (guarded)**, CPCV/MC defaults, Sharpe/vol-estimator/labeling settings, sweep-overfit flags |
 | `jordan` | risk limits | NAV, delta/vega/single-position limits, drawdown alert/halt, default risk-per-trade, verdict max age |
 | `ops` | schedule + orchestration | run times, production staleness, retry policy |

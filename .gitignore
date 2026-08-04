@@ -36,6 +36,9 @@ env/
 .vscode/
 .idea/
 
+# Obsidian vault state (wiki) — volatile UI state, not content
+docs/wiki/.obsidian/
+
 # Runtime output contracts — not committed
 data/outputs/*.json
 
@@ -54,6 +57,9 @@ data/mlruns/
 data/snapshots/
 logs/
 *.log
+
+# Runtime singleton lock (API instance PID file)
+data/api.pid
 
 # Deprecated DB dumps
 *.db.deprecated

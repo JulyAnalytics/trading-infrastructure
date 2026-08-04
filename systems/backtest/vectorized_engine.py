@@ -191,13 +191,98 @@ class VectorizedBacktester:
             'cost_drag_annual': cost_drag,
             'strategy_returns': strat_ret,
             'equity_curve': equity,
+            # Aligned post-shift inputs, kept so build_trade_log() (G4-2) can
+            # decompose the run into trades without re-deriving the alignment.
+            'signal_used': sig,
+            'returns_used': ret,
         }
+
+    def build_trade_log(
+        self,
+        result: dict,
+        notional: float = 10_000.0,
+        fee_fraction: float = 0.3,
+    ) -> list:
+        """
+        G4-2: build an ImplementationShortfall-format trade log from a
+        run_single() result — the automated path from vectorized results to
+        `trade_log` that audit #4 flagged as missing.
+
+        One entry per contiguous non-zero position block. Per-bar cost
+        (|Δsignal| × cost_bps) is attributed to the trade being closed when
+        one is open, else to the trade being opened, so summed trade costs
+        equal the costs inside strategy_returns exactly.
+
+        fee_fraction splits the single cost_bps assumption into broker_fee
+        vs slippage_cost (yfinance backtests have no separate fill data —
+        the split is an assumption, not a measurement; documented here and
+        in the IS output).
+
+        Keys per trade: entry_date, exit_date, direction, bars_held,
+        turnover, broker_fee, slippage_cost, gross_pnl, net_pnl, hedge_cost.
+        """
+        sig = result.get('signal_used')
+        ret = result.get('returns_used')
+        if sig is None or ret is None:
+            raise ValueError(
+                'result lacks signal_used/returns_used — pass a run_single() '
+                'result produced by this version of the engine.'
+            )
+        sig = sig.fillna(0.0)
+        ret = ret.reindex(sig.index).fillna(0.0)
+
+        trades: list[dict] = []
+        open_trade: "dict | None" = None
+        prev_pos = 0.0
+
+        def close(trade: dict, exit_date) -> None:
+            fees = trade['_cost'] * fee_fraction
+            slip = trade['_cost'] - fees
+            trades.append({
+                'entry_date':    str(trade['entry_date'])[:10],
+                'exit_date':     str(exit_date)[:10],
+                'direction':     'long' if trade['position'] > 0 else 'short',
+                'bars_held':     trade['bars'],
+                'turnover':      round(trade['_turnover'], 2),
+                'broker_fee':    round(fees, 4),
+                'slippage_cost': round(slip, 4),
+                'gross_pnl':     round(trade['_gross'], 4),
+                'net_pnl':       round(trade['_gross'] - trade['_cost'], 4),
+                'hedge_cost':    0.0,   # delta-one equity — no hedge leg
+            })
+
+        for date, pos in sig.items():
+            change = pos - prev_pos
+            if change != 0:
+                cost = abs(change) * self.cost_bps * notional
+                turn = abs(change) * notional
+                if open_trade is not None:
+                    open_trade['_cost'] += cost
+                    open_trade['_turnover'] += turn
+                    close(open_trade, date)
+                    open_trade = None
+                    cost = turn = 0.0   # consumed by the closing trade
+                if pos != 0:
+                    open_trade = {
+                        'entry_date': date, 'position': float(pos),
+                        'bars': 0, '_gross': 0.0,
+                        '_cost': cost, '_turnover': turn,
+                    }
+            if open_trade is not None and pos != 0:
+                open_trade['_gross'] += float(pos * ret.loc[date]) * notional
+                open_trade['bars'] += 1
+            prev_pos = pos
+
+        if open_trade is not None:
+            close(open_trade, sig.index[-1])
+        return trades
 
     def parameter_sweep(
         self,
         param_grid: Dict[str, List],
         signal_func: Callable[..., pd.Series],
         label_prefix: str = '',
+        dataset_id: Optional[str] = None,
     ) -> pd.DataFrame:
         """
         Sweep over a parameter grid, run a backtest for each combination,
@@ -216,6 +301,11 @@ class VectorizedBacktester:
             Receives self._returns and the current parameter combination.
         label_prefix : str
             Prepended to each result's label for identification.
+        dataset_id : str, optional
+            G4-1: when provided, every evaluated combination increments the
+            hypothesis registry's trial counter for this dataset, so DSR's
+            n_trials reflects the sweep automatically instead of relying on
+            the researcher remembering to call increment_trial_count().
 
         Returns
         -------
@@ -256,6 +346,27 @@ class VectorizedBacktester:
 
         if not rows:
             return pd.DataFrame()
+
+        if dataset_id:
+            try:
+                from systems.backtest.hypothesis_registry import (
+                    HypothesisRegistration,
+                )
+                reg = HypothesisRegistration()
+                for _ in rows:
+                    n = reg.increment_trial_count(dataset_id)
+                warnings.warn(
+                    f'parameter_sweep: {len(rows)} trials recorded against '
+                    f'dataset {dataset_id} (total now {n}).',
+                    stacklevel=2,
+                )
+            except Exception as exc:
+                warnings.warn(
+                    f'parameter_sweep: trial-count auto-increment failed '
+                    f'({exc}) — record {len(rows)} trials manually or DSR '
+                    'will be overstated.',
+                    stacklevel=2,
+                )
 
         df = pd.DataFrame(rows).sort_values('sharpe_oos', ascending=False)
         df = df.reset_index(drop=True)

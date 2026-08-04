@@ -14,7 +14,14 @@ Schema referenced (research-capture-system/research/db/schema.sql):
         strike, expiry, contracts, entry_premium, exit_premium,
         date_opened, date_closed)
   trade_options_meta(trade_id, strategy_type, iv_at_entry, …)
-  thesis(id, instrument, narrative, …) · review(id, …, created_at)
+  thesis(id, instrument, narrative, worst_case_dollar, …, last_updated)
+  review(id, trade_id, closed_at NOT NULL, locked_at, …)
+        -- NOTE: review has NO created_at column (verified against the live
+        -- DB 2026-07-17); closed_at is stamped when the Phase-1 review is
+        -- written at position close.
+  entity_events(id, entity_type, entity_id, event_type
+        [created|status_changed|updated|filed], old_status, new_status,
+        occurred_at)   -- append-only, written by RCS triggers only
 """
 from __future__ import annotations
 
@@ -72,18 +79,138 @@ def fetch_active_trades() -> "list[dict]":
             )
             t["entries"] = entries
             t["exits"] = exits
-            t["legs"] = [dict(r) for r in conn.execute("""
-                SELECT id, direction, type, strike, expiry, contracts,
-                       entry_premium, exit_premium, date_opened, date_closed
-                FROM trade_option_legs WHERE trade_id = ? ORDER BY date_opened
-            """, [tid])]
-            meta = conn.execute(
-                "SELECT * FROM trade_options_meta WHERE trade_id = ?", [tid]
-            ).fetchone()
-            t["options_meta"] = dict(meta) if meta else None
+            _hydrate_trade(conn, t)
         return trades
     finally:
         conn.close()
+
+
+def _hydrate_trade(conn: sqlite3.Connection, trade: dict) -> dict:
+    """Attach legs, options meta and the thesis worst-case budget to one trade
+    row. Shared by fetch_active_trades() and fetch_trade()."""
+    tid = trade["id"]
+    trade["legs"] = [dict(r) for r in conn.execute("""
+        SELECT id, direction, type, strike, expiry, contracts,
+               entry_premium, exit_premium, date_opened, date_closed
+        FROM trade_option_legs WHERE trade_id = ? ORDER BY date_opened
+    """, [tid])]
+    meta = conn.execute(
+        "SELECT * FROM trade_options_meta WHERE trade_id = ?", [tid]
+    ).fetchone()
+    trade["options_meta"] = dict(meta) if meta else None
+    return trade
+
+
+def fetch_trade(trade_id: str) -> "dict | None":
+    """
+    One RCS trade by ULID — any status (idea/active/closed/discarded), with
+    legs, options meta, and the linked thesis's worst_case_dollar.
+
+    fetch_active_trades() is deliberately active-only (it feeds Jordan's
+    book); the Sarah intake seam also needs idea-stage trades, so this is the
+    single-trade, status-agnostic read. Still strictly read-only (ADR-003).
+    """
+    conn = _connect()
+    try:
+        row = conn.execute("""
+            SELECT id, name, instrument, instrument_type, thesis_id,
+                   status, created_at, closed_at
+            FROM trade WHERE id = ?
+        """, [trade_id]).fetchone()
+        if row is None:
+            return None
+        trade = _hydrate_trade(conn, dict(row))
+        trade["thesis"] = None
+        if trade.get("thesis_id"):
+            th = conn.execute(
+                "SELECT id, instrument, status, worst_case_dollar "
+                "FROM thesis WHERE id = ?", [trade["thesis_id"]]).fetchone()
+            trade["thesis"] = dict(th) if th else None
+        return trade
+    finally:
+        conn.close()
+
+
+def list_trades(query: "str | None" = None,
+                statuses: "tuple[str, ...]" = ("idea", "active"),
+                limit: int = 50) -> "list[dict]":
+    """
+    Browse/search RCS trades — the "find it without knowing the ULID" read.
+
+    ULIDs are not memorable, so every path that takes one needs a way to get
+    there from a ticker or a trade name. Matches case-insensitively on
+    instrument, name, or the ULID itself.
+
+    Returns lightweight rows (no entries/exits) plus a leg count, which is the
+    field that tells you whether the position surfaces will have anything to
+    price. Read-only (ADR-003).
+    """
+    where = [f"t.status IN ({', '.join('?' * len(statuses))})"]
+    args: list = list(statuses)
+    if query:
+        where.append("(upper(t.instrument) LIKE ? OR upper(t.name) LIKE ? "
+                     "OR upper(t.id) LIKE ?)")
+        like = f"%{query.strip().upper()}%"
+        args += [like, like, like]
+    conn = _connect()
+    try:
+        rows = [dict(r) for r in conn.execute(f"""
+            SELECT t.id, t.name, t.instrument, t.instrument_type, t.status,
+                   t.created_at,
+                   (SELECT count(*) FROM trade_option_legs l
+                     WHERE l.trade_id = t.id) AS leg_count
+            FROM trade t
+            WHERE {' AND '.join(where)}
+            ORDER BY t.created_at DESC
+            LIMIT ?
+        """, [*args, limit])]
+    finally:
+        conn.close()
+    return rows
+
+
+def fetch_trade_activations(since: str,
+                            include_ideas: bool = False) -> "list[dict]":
+    """
+    Trade lifecycle events newer than `since`, oldest first — the read side of
+    the Sarah intake trigger (trade-intake spec §5).
+
+    since: ISO-8601 string compared against entity_events.occurred_at, which
+    RCS stores as text ('YYYY-MM-DDTHH:MM:SSZ'), so a lexicographic '>' is a
+    correct chronological comparison. Pass '1970-01-01' to read everything.
+
+    include_ideas: also return `created` events (a trade entered as an idea).
+    The memo's structure comparison is a chooser and is most useful before the
+    legs are frozen, so firing at idea stage is the recommended default — but
+    it is a registry toggle (sarah.intake_fire_on_idea), not a hardcode.
+
+    The watermark lives on the trading side (sarah_intake_watermark): RCS's
+    own export_watermarks table does not cover the trade entity, and ADR-003
+    forbids writing research.db regardless.
+    """
+    event_types = ("status_changed", "created") if include_ideas \
+        else ("status_changed",)
+    placeholders = ", ".join("?" * len(event_types))
+    conn = _connect()
+    try:
+        rows = conn.execute(f"""
+            SELECT id, entity_id, event_type, old_status, new_status,
+                   occurred_at
+            FROM entity_events
+            WHERE entity_type = 'trade'
+              AND event_type IN ({placeholders})
+              AND new_status IN ('active', 'idea')
+              AND occurred_at > ?
+            ORDER BY occurred_at
+        """, [*event_types, since]).fetchall()
+    finally:
+        conn.close()
+    # A 'created' event always carries new_status='idea'; a status_changed we
+    # care about carries 'active'. Anything else (discarded, closed) is
+    # filtered above — an intake must never fire on a trade being abandoned.
+    return [dict(r) for r in rows
+            if (r["event_type"] == "created" and r["new_status"] == "idea")
+            or (r["event_type"] == "status_changed" and r["new_status"] == "active")]
 
 
 def weekly_activity(days: int = 7) -> dict:
@@ -108,8 +235,10 @@ def weekly_activity(days: int = 7) -> dict:
             "SELECT count(*) FROM trade WHERE closed_at >= ?")
         out["trades_active_now"] = int(conn.execute(
             "SELECT count(*) FROM trade WHERE status = 'active'").fetchone()[0])
+        # review has no created_at; closed_at (NOT NULL) marks when the
+        # Phase-1 review was written at position close.
         out["reviews_completed"] = count(
-            "SELECT count(*) FROM review WHERE created_at >= ?")
+            "SELECT count(*) FROM review WHERE closed_at >= ?")
         out["observations_captured"] = count(
             "SELECT count(*) FROM observation WHERE created_at >= ?")
         out["theses_updated"] = count(

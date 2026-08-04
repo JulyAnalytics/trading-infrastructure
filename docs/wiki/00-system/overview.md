@@ -1,4 +1,17 @@
+---
+domain: trading-system
+stage: wiki
+project: v1-workstation
+status: active
+---
+
 # System Overview
+
+> **New here?** Read this page, then the
+> [glossary](glossary.md), then follow the
+> [morning routine](../04-workflows/morning-routine.md) once with the app
+> open. If you're working with an AI assistant, point it at the
+> [LLM assistant guide](llm-assistant-guide.md).
 
 ## What this is
 
@@ -8,7 +21,7 @@ locked contract with the components downstream of it. The metaphor comes from
 a boutique fund's desk: a macro strategist (Marcus), a vol/derivatives head
 (Sarah), a quant researcher (Priya), a risk manager (Jordan), an execution
 specialist (Kai, deferred), and a chief-of-staff (Alex). The operator — you —
-is the PM: the system prepares decisions; the human makes them.
+are the PM: the system prepares decisions; the human makes them.
 
 ## The core idea
 
@@ -65,22 +78,23 @@ Three deliberate v1.0 principles:
 ```
 trading-infrastructure/
 ├── config.py            infrastructure literals + registry facade
-├── scheduler.py         legacy blocking scheduler (Phase 6 replaces)
+├── scheduler.py         RETIRED (see systems/orchestration/scheduler_v2.py)
 ├── systems/
 │   ├── params/          parameter registry (v1.0 core)
 │   ├── api/             FastAPI service layer :8100
-│   ├── orchestration/   job runner (subprocess-per-job)
+│   ├── orchestration/   job runner + scheduler v2 + alerts
 │   ├── signals/         Marcus: classifier + 1.0 analytics
-│   ├── sarah/           vol pipeline, greeks, scenarios, pretrade, regime library
+│   ├── sarah/           vol pipeline, greeks, scenarios, memo builder, regime library
 │   ├── backtest/        Priya: 15-module research engine
 │   ├── risk/            Jordan: book, limits, stress, intake, RCS bridge
 │   ├── data_feeds/      FRED / CFTC / yfinance / CBOE ingestion
-│   ├── dashboard/       legacy Dash app :8050 (being retired)
-│   ├── reports/         PDF snapshot generator
+│   ├── dashboard/       RETIRED Dash app (figure builders still imported by reports)
+│   ├── reports/         PDF snapshot + weekly review generators
 │   └── utils/           db.py (connections), pricing.py (Black-Scholes)
 ├── frontend/            React workstation (Vite + TS) :5173
 ├── research/signals/    vol surface + signal math used by Sarah
 ├── scripts/             verify suites, golden master, backfills, migrations
+├── reports/weekly/      generated weekly reviews (md + pdf)
 ├── data/                processed DBs, outputs (contracts), events, snapshots
 └── docs/                architecture, audits, ADRs, this wiki
 ```

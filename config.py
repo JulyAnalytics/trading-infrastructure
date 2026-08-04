@@ -126,10 +126,32 @@ MLFLOW_EXPERIMENT_NAME = "priya_research"
 # persistent state. Table created in trading.db alongside Sarah's tables.
 HYPOTHESIS_REGISTRY_DB = VOL_DB_PATH  # trading.db — shared research DB
 
-# RCS SQLite (read-only from this repo — see systems/risk RCS bridge)
-RCS_DB_PATH = os.path.expanduser(
-    "~/Nextcloud/Trading/research-capture-system/research/data/research.db"
-)
+# RCS SQLite (read-only from this repo — see systems/risk RCS bridge).
+# The live RCS app configures its own DB location in research/.env (the path was
+# moved out of the repo to ~/.local/state/rcs/ to avoid Nextcloud generating WAL
+# conflict copies). RCS owns its DB location, so follow it: resolve db_path from
+# the RCS .env, falling back to the in-repo default if the .env or key is absent.
+# Resolving directly to the live path (rather than symlinking the in-repo copy)
+# keeps -wal/-shm next to the target and avoids re-creating the Nextcloud sync
+# problem that prompted the split in the first place.
+def _resolve_rcs_db_path() -> str:
+    rcs_env = os.path.expanduser(
+        "~/Nextcloud/Trading/research-capture-system/research/.env"
+    )
+    try:
+        from dotenv import dotenv_values
+
+        db_path = dotenv_values(rcs_env).get("db_path")
+        if db_path:
+            return os.path.expanduser(db_path)
+    except Exception:
+        pass
+    return os.path.expanduser(
+        "~/Nextcloud/Trading/research-capture-system/research/data/research.db"
+    )
+
+
+RCS_DB_PATH = _resolve_rcs_db_path()
 
 
 # ── Tunables — resolved from the parameter registry ──────────────────────────

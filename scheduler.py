@@ -1,4 +1,13 @@
 """
+DEPRECATED (2026-07-18, Phase 6): superseded by scheduler v2 —
+systems/orchestration/scheduler_v2.py, which runs inside the API process
+(:8100), reads schedule times live from the parameter registry (OpsParams),
+enforces the Marcus→Sarah dependency, retries, and alerts on failure.
+Do not run this file; it bypasses the single-writer job discipline.
+Kept only as a reference for the pre-v1.0 cron layout.
+"""
+
+"""
 Daily Pipeline Scheduler
 Runs the macro pipeline on a schedule so data is always fresh.
 
@@ -92,45 +101,19 @@ def run_nightly_snapshot():
 
 
 if __name__ == "__main__":
-    os.makedirs("logs", exist_ok=True)
-    logger.add("logs/phase1.log", rotation="1 week", retention="4 weeks")
-
-    # Run immediately on startup
-    run_daily_pipeline()
-
-    # Schedule: weekdays at 6:05pm ET (after US close + data publishing lag)
-    schedule.every().monday.at("18:05").do(run_daily_pipeline)
-    schedule.every().tuesday.at("18:05").do(run_daily_pipeline)
-    schedule.every().wednesday.at("18:05").do(run_daily_pipeline)
-    schedule.every().thursday.at("18:05").do(run_daily_pipeline)
-    schedule.every().friday.at("18:05").do(run_daily_pipeline)
-
-    # Weekly full refresh on Sunday evening
-    schedule.every().sunday.at("20:00").do(run_weekly_full_refresh)
-
-    # Phase 4: weekly calendar fetch (Sunday after full refresh)
-    schedule.every().sunday.at("20:05").do(
-        lambda: fetch_calendar_data(build_fred_client(), get_connection())
+    # Retired 2026-07-18 (Phase 6), and code-enforced retired 2026-07-19:
+    # scheduler v2 (systems/orchestration/scheduler_v2.py) runs inside the
+    # API process, reads times live from OpsParams, enforces the Marcus→Sarah
+    # dependency, and submits through JobManager (single-writer discipline).
+    # This legacy loop bypasses all of that. Refuse to run rather than risk a
+    # second scheduler firing the same engines from a second process.
+    import sys
+    sys.stderr.write(
+        "scheduler.py is retired. The live scheduler is systems/orchestration/"
+        "scheduler_v2.py, which runs inside the API process:\n"
+        "    venv/bin/python -m uvicorn systems.api.main:app "
+        "--host 127.0.0.1 --port 8100\n"
+        "This file is kept only as a historical reference for the pre-v1.0 "
+        "cron layout. It will not start.\n"
     )
-
-    # Phase 4: daily SPY equity fetch
-    schedule.every().day.at("18:05").do(
-        lambda: fetch_equity_data(get_connection())
-    )
-
-    # Sarah — vol surface daily run (08:00, after Marcus writes regime_state.json)
-    schedule.every().monday.at("08:00").do(run_daily_vol)
-    schedule.every().tuesday.at("08:00").do(run_daily_vol)
-    schedule.every().wednesday.at("08:00").do(run_daily_vol)
-    schedule.every().thursday.at("08:00").do(run_daily_vol)
-    schedule.every().friday.at("08:00").do(run_daily_vol)
-
-    # Phase 4: nightly snapshot, weekdays only (single lambda)
-    schedule.every().day.at("18:15").do(
-        lambda: run_nightly_snapshot() if datetime.today().weekday() < 5 else None
-    )
-
-    logger.info("Scheduler running. Press Ctrl+C to stop.")
-    while True:
-        schedule.run_pending()
-        time.sleep(60)
+    sys.exit(2)

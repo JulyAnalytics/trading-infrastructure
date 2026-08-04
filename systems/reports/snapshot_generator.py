@@ -11,6 +11,7 @@ from datetime import datetime
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..'))
 
+import pandas as pd
 import plotly.graph_objects as go
 from reportlab.lib.pagesizes import A4, landscape
 from reportlab.platypus import SimpleDocTemplate, Image, Paragraph, Spacer, Table
@@ -71,6 +72,9 @@ def generate_snapshot(
             ORDER BY event_date
             LIMIT 5
         """).df()
+        # DuckDB .df() materializes DATE as datetime64 → pd.Timestamp at scalar
+        # access; coerce back to stdlib date so date arithmetic below is valid.
+        calendar_df["event_date"] = pd.to_datetime(calendar_df["event_date"]).dt.date
     except Exception as e:
         logger.warning(f"Snapshot: could not load calendar: {e}")
         calendar_df = None

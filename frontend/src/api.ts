@@ -36,11 +36,19 @@ export function apiSend<T = any>(
   }).then((r) => handle<T>(r));
 }
 
+// Regime colors are CSS custom properties (defined per theme in
+// theme.css) so they follow the active theme. They resolve fine in
+// inline styles; use cssVar() from ./theme if a concrete value is
+// needed (e.g. for Plotly figure JSON).
 export const REGIME_COLORS: Record<string, string> = {
-  RISK_ON_LOW_VOL: "#00C851",
-  RISK_ON_ELEVATED_VOL: "#ffbb33",
-  NEUTRAL: "#33b5e5",
-  CAUTION: "#FF8800",
-  RISK_OFF_STRESS: "#ff4444",
-  CRISIS: "#CC0000",
+  RISK_ON_LOW_VOL: "var(--regime-risk-on-low-vol)",
+  RISK_ON_ELEVATED_VOL: "var(--regime-risk-on-elevated-vol)",
+  NEUTRAL: "var(--regime-neutral)",
+  CAUTION: "var(--regime-caution)",
+  RISK_OFF_STRESS: "var(--regime-risk-off-stress)",
+  CRISIS: "var(--regime-crisis)",
 };
+
+export function regimeColor(regime: string): string {
+  return REGIME_COLORS[regime] ?? "var(--muted)";
+}
